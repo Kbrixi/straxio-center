@@ -20,6 +20,7 @@ demande explicite et validation préalable (cf. règle Cockpit de Chasse). -->
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script>
 tailwind.config={theme:{extend:{colors:{bg:'#000000',surface:'#0d0d0d',sAlt:'#141414',sHov:'#1f1f1f',bdr:'#2b2b2b',txt:'#f2ead8',mut:'#c9a97e',acc:'#ff9c00',accH:'#cc7a00',accS:'rgba(255,156,0,.12)',ok:'#5fbf8f',okS:'rgba(95,191,143,.12)',warn:'#ffcc66',warnS:'rgba(255,204,102,.12)',inf:'#9999ff',infS:'rgba(153,153,255,.12)'},fontFamily:{disp:['"Antonio"','sans-serif'],body:['"Jost"','sans-serif']}}}}
@@ -313,6 +314,7 @@ body.vc-panel-open #MO{right:0}
 <button onclick="nav('gcal')" class="ni flex items-center gap-3 px-3 py-2.5 text-sm text-black bg-acc hover:brightness-110 w-full text-left" data-v="gcal">Agenda Google<span id="sGC" class="ml-auto w-1.5 h-1.5 rounded-full bg-black/30"></span></button>
 <button onclick="nav('gmail')" class="ni flex items-center gap-3 px-3 py-2.5 text-sm text-black bg-inf hover:brightness-110 w-full text-left" data-v="gmail">Gmail<span id="sGM" class="navcnt ml-auto text-[.7rem] px-2 py-0.5 rounded-full">0</span></button>
 <button onclick="nav('meetings')" class="ni flex items-center gap-3 px-3 py-2.5 text-sm text-black bg-[#cc99cc] hover:brightness-110 w-full text-left" data-v="meetings"><i class="fa-solid fa-calendar-check"></i>Meeting Scheduler</button>
+<button onclick="nav('expenses')" class="ni flex items-center gap-3 px-3 py-2.5 text-sm text-black bg-[#ffcc66] hover:brightness-110 w-full text-left" data-v="expenses"><i class="fa-solid fa-receipt"></i>Notes de frais<span id="sEXC" class="navcnt ml-auto text-[.7rem] px-2 py-0.5 rounded-full">0</span></button>
 </nav>
 <div class="pl-8 pr-4 py-2 flex flex-col gap-1.5">
 <button onclick="openPM()" class="flex items-center gap-3 px-3 py-2 rounded-l-full text-xs uppercase font-disp tracking-wide text-mut hover:text-txt hover:bg-sHov w-full text-left transition-colors"><i class="fa-solid fa-folder-plus w-5 text-center text-xs"></i>Nouveau projet</button>
@@ -365,6 +367,17 @@ function svData(){localStorage.setItem('cdc_data',JSON.stringify(D));}
 function ldLog(){try{const s=localStorage.getItem('cdc_log');if(s)return JSON.parse(s);}catch(e){}return[];}
 let CL=ldLog();
 function svLog(){localStorage.setItem('cdc_log',JSON.stringify(CL));}
+
+/* ===== NOTES DE FRAIS (déclaration précoce : EXP doit exister avant le premier ren() au boot) ===== */
+function ldExpenses(){try{const s=localStorage.getItem('cdc_expenses');if(s)return JSON.parse(s);}catch(e){}return[];}
+let EXP=ldExpenses();
+function svExpenses(){localStorage.setItem('cdc_expenses',JSON.stringify(EXP));if(typeof fbIsReady==='function'&&fbIsReady())fbQueuePush();}
+/* Photo en attente d'envoi cloud : stockée à part (cdc_expense_pending_<id>), JAMAIS dans cdc_expenses
+   ni dans FB_KEYS, pour ne pas faire gonfler le document Firestore (déjà proche de la limite de 1 Mo). */
+function expPendingKey(id){return'cdc_expense_pending_'+id;}
+function expSavePendingPhoto(id,dataUrl){try{localStorage.setItem(expPendingKey(id),dataUrl);}catch(e){if(typeof toast==='function')toast('Stockage plein : la photo n’a pas pu être gardée localement','err');}}
+function expGetPendingPhoto(id){try{return localStorage.getItem(expPendingKey(id));}catch(e){return null;}}
+function expClearPendingPhoto(id){try{localStorage.removeItem(expPendingKey(id));}catch(e){}}
 
 /* ===== MARKETING (module type HubSpot) ===== */
 function emptyMk(){return{campaigns:[],content:[],emails:[],social:[],pages:[],ads:[],editorial:[]};}
@@ -464,8 +477,12 @@ let GMAIL={
 var LZString=function(){var r=String.fromCharCode,o="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=",n="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-$",e={};function t(r,o){if(!e[r]){e[r]={};for(var n=0;n<r.length;n++)e[r][r.charAt(n)]=n}return e[r][o]}var i={compressToBase64:function(r){if(null==r)return"";var n=i._compress(r,6,function(r){return o.charAt(r)});switch(n.length%4){default:case 0:return n;case 1:return n+"===";case 2:return n+"==";case 3:return n+"="}},decompressFromBase64:function(r){return null==r?"":""==r?null:i._decompress(r.length,32,function(n){return t(o,r.charAt(n))})},compressToUTF16:function(o){return null==o?"":i._compress(o,15,function(o){return r(o+32)})+" "},decompressFromUTF16:function(r){return null==r?"":""==r?null:i._decompress(r.length,16384,function(o){return r.charCodeAt(o)-32})},compressToUint8Array:function(r){for(var o=i.compress(r),n=new Uint8Array(2*o.length),e=0,t=o.length;e<t;e++){var s=o.charCodeAt(e);n[2*e]=s>>>8,n[2*e+1]=s%256}return n},decompressFromUint8Array:function(o){if(null==o)return i.decompress(o);for(var n=new Array(o.length/2),e=0,t=n.length;e<t;e++)n[e]=256*o[2*e]+o[2*e+1];var s=[];return n.forEach(function(o){s.push(r(o))}),i.decompress(s.join(""))},compressToEncodedURIComponent:function(r){return null==r?"":i._compress(r,6,function(r){return n.charAt(r)})},decompressFromEncodedURIComponent:function(r){return null==r?"":""==r?null:(r=r.replace(/ /g,"+"),i._decompress(r.length,32,function(o){return t(n,r.charAt(o))}))},compress:function(o){return i._compress(o,16,function(o){return r(o)})},_compress:function(r,o,n){if(null==r)return"";var e,t,i,s={},u={},a="",p="",c="",l=2,f=3,h=2,d=[],m=0,v=0;for(i=0;i<r.length;i+=1)if(a=r.charAt(i),Object.prototype.hasOwnProperty.call(s,a)||(s[a]=f++,u[a]=!0),p=c+a,Object.prototype.hasOwnProperty.call(s,p))c=p;else{if(Object.prototype.hasOwnProperty.call(u,c)){if(c.charCodeAt(0)<256){for(e=0;e<h;e++)m<<=1,v==o-1?(v=0,d.push(n(m)),m=0):v++;for(t=c.charCodeAt(0),e=0;e<8;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}else{for(t=1,e=0;e<h;e++)m=m<<1|t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t=0;for(t=c.charCodeAt(0),e=0;e<16;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}0==--l&&(l=Math.pow(2,h),h++),delete u[c]}else for(t=s[c],e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;0==--l&&(l=Math.pow(2,h),h++),s[p]=f++,c=String(a)}if(""!==c){if(Object.prototype.hasOwnProperty.call(u,c)){if(c.charCodeAt(0)<256){for(e=0;e<h;e++)m<<=1,v==o-1?(v=0,d.push(n(m)),m=0):v++;for(t=c.charCodeAt(0),e=0;e<8;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}else{for(t=1,e=0;e<h;e++)m=m<<1|t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t=0;for(t=c.charCodeAt(0),e=0;e<16;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1}0==--l&&(l=Math.pow(2,h),h++),delete u[c]}else for(t=s[c],e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;0==--l&&(l=Math.pow(2,h),h++)}for(t=2,e=0;e<h;e++)m=m<<1|1&t,v==o-1?(v=0,d.push(n(m)),m=0):v++,t>>=1;for(;;){if(m<<=1,v==o-1){d.push(n(m));break}v++}return d.join("")},decompress:function(r){return null==r?"":""==r?null:i._decompress(r.length,32768,function(o){return r.charCodeAt(o)})},_decompress:function(o,n,e){var t,i,s,u,a,p,c,l=[],f=4,h=4,d=3,m="",v=[],g={val:e(0),position:n,index:1};for(t=0;t<3;t+=1)l[t]=t;for(s=0,a=Math.pow(2,2),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;switch(s){case 0:for(s=0,a=Math.pow(2,8),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;c=r(s);break;case 1:for(s=0,a=Math.pow(2,16),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;c=r(s);break;case 2:return""}for(l[3]=c,i=c,v.push(c);;){if(g.index>o)return"";for(s=0,a=Math.pow(2,d),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;switch(c=s){case 0:for(s=0,a=Math.pow(2,8),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;l[h++]=r(s),c=h-1,f--;break;case 1:for(s=0,a=Math.pow(2,16),p=1;p!=a;)u=g.val&g.position,g.position>>=1,0==g.position&&(g.position=n,g.val=e(g.index++)),s|=(u>0?1:0)*p,p<<=1;l[h++]=r(s),c=h-1,f--;break;case 2:return v.join("")}if(0==f&&(f=Math.pow(2,d),d++),l[c])m=l[c];else{if(c!==h)return null;m=i+i.charAt(0)}v.push(m),l[h++]=i+m.charAt(0),i=m,0==--f&&(f=Math.pow(2,d),d++)}}};return i}();"function"==typeof define&&define.amd?define(function(){return LZString}):"undefined"!=typeof module&&null!=module?module.exports=LZString:"undefined"!=typeof angular&&null!=angular&&angular.module("LZString",[]).factory("LZString",function(){return LZString});
 
 /* ===== FIREBASE CLOUD SYNC ===== */
-const FB={app:null,auth:null,db:null,uid:null,userEmail:null,listener:null,connected:false,pushing:false,signingIn:false};
-const FB_KEYS=['cdc_folders','cdc_data','cdc_log','cdc_marketing','cdc_settings','cdc_templates','cdc_gcal_client_id','cdc_notes_data','cdc_email_log','cdc_email_groups','cdc_email_seqs','cdc_email_seq_runs','cdc_sounds','cdc_meetings','cdc_booking_settings','cdc_wa_campaigns','cdc_wa_log','cdc_wa_seq_pending','cdc_wa_default_cc','cdc_funnel_stages','cdc_funnel_settings','cdc_sequences_v2','cdc_seq_runs_v2'];
+const FB={app:null,auth:null,db:null,storage:null,uid:null,userEmail:null,listener:null,connected:false,pushing:false,signingIn:false};
+const FB_KEYS=['cdc_folders','cdc_data','cdc_log','cdc_marketing','cdc_settings','cdc_templates','cdc_gcal_client_id','cdc_notes_data','cdc_email_log','cdc_email_groups','cdc_email_seqs','cdc_email_seq_runs','cdc_sounds','cdc_meetings','cdc_booking_settings','cdc_wa_campaigns','cdc_wa_log','cdc_wa_seq_pending','cdc_wa_default_cc','cdc_funnel_stages','cdc_funnel_settings','cdc_sequences_v2','cdc_seq_runs_v2','cdc_expenses'];
+/* NB : cdc_expenses ne contient QUE les métadonnées des notes de frais (montant, date, fournisseur,
+   catégorie, chemin/URL de la photo dans Firebase Storage). Les photos elles-mêmes ne transitent
+   jamais par ce mécanisme de sync (voir uploadExpensePhoto) — sinon on dépasserait vite la limite
+   de 1 Mo par document Firestore, déjà serrée avec le reste des données. */
 /* Config Firebase par défaut de l'app (projet stargate-command-fd9fa).
    Ces valeurs client Firebase sont publiques par design : la sécurité repose
    sur les règles Firestore, pas sur le secret de l'apiKey. Cela permet à
@@ -479,9 +496,11 @@ function fbIsReady(){return FB.app&&FB.db&&FB.uid;}
 function fbInit(cfg){
 try{
 if(FB.app){try{FB.app.delete();}catch(e){}}
-FB.app=firebase.initializeApp({apiKey:cfg.apiKey,authDomain:cfg.authDomain,projectId:cfg.projectId,storageBucket:cfg.storageBucket||'',messagingSenderId:cfg.messagingSenderId||'',appId:cfg.appId||''});
+var _storageBucket=cfg.storageBucket||(cfg.projectId?cfg.projectId+'.firebasestorage.app':'');
+FB.app=firebase.initializeApp({apiKey:cfg.apiKey,authDomain:cfg.authDomain,projectId:cfg.projectId,storageBucket:_storageBucket,messagingSenderId:cfg.messagingSenderId||'',appId:cfg.appId||''});
 FB.auth=firebase.auth();
 FB.db=firebase.firestore();
+try{FB.storage=firebase.storage();}catch(e){FB.storage=null;console.warn('[Firebase] Storage non initialisé (bucket manquant ou non activé) :',e.message);}
 /* Safari (streaming HTTP cassé) et Opera (VPN/proxy intégré) bloquent silencieusement
    le canal temps réel par défaut de Firestore (WebChannel). On force le long-polling,
    qui repose sur des requêtes HTTP classiques et fonctionne partout. Doit être appelé
@@ -587,6 +606,9 @@ if(typeof window.MK_MEETINGS!=='undefined')window.MK_MEETINGS=window.ldMeetings(
 if(typeof window.MK_BOOKING!=='undefined')window.MK_BOOKING=window.ldBookingSettings();
 /* Recharger les données du module email si déjà initialisé */
 if(typeof window._onDataSynced==='function')window._onDataSynced();
+/* Recharger les notes de frais et relancer l'envoi des photos en attente */
+EXP=ldExpenses();
+if(typeof window._onExpensesSynced==='function')window._onExpensesSynced();
 /* Recharger aussi les notes si le module existe */
 if(typeof ND!=='undefined'){var newND=ldNotes();if(newND){ND.notes=newND.notes;ND.categories=newND.categories;ND.tags=newND.tags;}}
 FOLDERS.forEach(function(f){if(!D[f.key])D[f.key]=emptyFolderData();});
@@ -1646,6 +1668,8 @@ else if(S.v==='gcal'){const b=document.querySelector('#SN .ni[data-v="gcal"]');i
 else if(S.v==='gmail'){const b=document.querySelector('#SN .ni[data-v="gmail"]');if(b)b.classList.add('act');}
 else if(S.v==='meetings'){const b=document.querySelector('#SN .ni[data-v="meetings"]');if(b)b.classList.add('act');}
 else if(S.v==='notes'){const b=document.querySelector('#SN .ni[data-v="notes"]');if(b)b.classList.add('act');}
+else if(S.v==='expenses'){const b=document.querySelector('#SN .ni[data-v="expenses"]');if(b)b.classList.add('act');}
+const sexc=document.getElementById('sEXC');if(sexc)sexc.textContent=EXP.filter(x=>x.status==='a_traiter').length;
 document.getElementById('sCC').textContent=FOLDERS.reduce((n,f)=>n+(D[f.key]?.contacts||[]).length,0);
 document.getElementById('sTC').textContent=FOLDERS.reduce((n,f)=>n+(D[f.key]?.tasks||[]).filter(t=>!t.completed).length,0);
 const gc=document.getElementById('sGC');if(gc)gc.className='ml-auto w-1.5 h-1.5 rounded-full '+(GCAL.connected?'bg-ok':'bg-mut/40');
@@ -1670,6 +1694,7 @@ else if(S.v==='gcal')rAgenda();
 else if(S.v==='gmail')rGmail();
 else if(S.v==='meetings')rMeetings();
 else if(S.v==='notes'){if(NS.isEditorOpen&&NS.selectedNoteId)rNoteEditor();else rNotes();}
+else if(S.v==='expenses')rExpenses();
 else{S.v='dash';rDash();}
 }
 
@@ -4817,6 +4842,9 @@ var html=`<div class="pt-4 border-t border-bdr mt-4">
 <input id="fbApiKey" class="fi text-xs mb-2" placeholder="AIzaSy..." value="${cfg?cfg.apiKey:''}">
 <label class="text-[.65rem] text-mut block mb-1">ID du projet (projectId)</label>
 <input id="fbProjectId" class="fi text-xs mb-2" placeholder="mon-crm-abc123" value="${cfg?cfg.projectId:''}">
+<label class="text-[.65rem] text-mut block mb-1">Bucket Storage (storageBucket) — pour les photos de notes de frais</label>
+<input id="fbStorageBucket" class="fi text-xs" placeholder="mon-crm-abc123.firebasestorage.app" value="${cfg?(cfg.storageBucket||''):''}">
+<p class="text-[.6rem] text-mut mt-1">Laisse vide pour une valeur par défaut. Si l'envoi de photos échoue, active Cloud Storage dans la console Firebase (Storage → Get started) et colle ici le nom exact du bucket affiché.</p>
 </div>
 <div class="flex flex-wrap gap-2">
 <button onclick="fbConnectFromSettings()" class="h-9 px-4 rounded-xl bg-inf hover:brightness-110 text-black text-xs font-disp font-bold uppercase tracking-wide transition-colors bp">Enregistrer</button>
@@ -4831,8 +4859,10 @@ return html;
 function fbConnectFromSettings(){
 var apiKey=document.getElementById('fbApiKey').value.trim();
 var projectId=document.getElementById('fbProjectId').value.trim();
+var bucketEl=document.getElementById('fbStorageBucket');
+var storageBucket=bucketEl?bucketEl.value.trim():'';
 if(!apiKey||!projectId){toast('Remplis apiKey et projectId','err');return;}
-var cfg={apiKey:apiKey,authDomain:projectId+'.firebaseapp.com',projectId:projectId,appId:''};
+var cfg={apiKey:apiKey,authDomain:projectId+'.firebaseapp.com',projectId:projectId,storageBucket:storageBucket,appId:''};
 fbSaveConfig(cfg);fbInit(cfg);
 toast('Firebase initialisé...','info');
 setTimeout(function(){openSettingsM();},1500);
@@ -4841,8 +4871,10 @@ function fbQuickGoogleSignIn(){
 if(!FB.app){
 var apiKey=document.getElementById('fbApiKey').value.trim();
 var projectId=document.getElementById('fbProjectId').value.trim();
+var bucketEl0=document.getElementById('fbStorageBucket');
+var storageBucket0=bucketEl0?bucketEl0.value.trim():'';
 if(!apiKey||!projectId){toast('Remplis d\'abord apiKey et projectId, puis clique Enregistrer','err');return;}
-var cfg={apiKey:apiKey,authDomain:projectId+'.firebaseapp.com',projectId:projectId,appId:''};
+var cfg={apiKey:apiKey,authDomain:projectId+'.firebaseapp.com',projectId:projectId,storageBucket:storageBucket0,appId:''};
 fbSaveConfig(cfg);fbInit(cfg);
 setTimeout(function(){fbGoogleSignIn();},1000);
 }else{fbGoogleSignIn();}
@@ -9489,6 +9521,395 @@ window.addEventListener('hashchange',function(){
   }
 });
 
+</script>
+<script>
+/* =====================================================================
+   MODULE NOTES DE FRAIS
+   - Capture photo (mobile: appareil photo via capture="environment")
+   - OCR local gratuit (Tesseract.js, chargé à la demande, hors-ligne)
+   - Catégorisation automatique par mots-clés + choix manuel
+   - Métadonnées synchronisées via le mécanisme cdc_* existant (léger)
+   - Photos envoyées à part vers Firebase Storage (pas dans Firestore,
+     pour ne pas aggraver la limite de 1 Mo/document déjà serrée)
+   ===================================================================== */
+(function(){
+'use strict';
+
+const EXP_CATEGORIES=[
+{key:'repas',label:'Repas',icon:'fa-utensils',color:'#ffcc66'},
+{key:'transport',label:'Transport',icon:'fa-car',color:'#9999ff'},
+{key:'hebergement',label:'Hébergement',icon:'fa-bed',color:'#cc99cc'},
+{key:'fournitures',label:'Fournitures',icon:'fa-box',color:'#5fbf8f'},
+{key:'logiciel',label:'Logiciel / Abonnement',icon:'fa-laptop-code',color:'#99ccff'},
+{key:'marketing',label:'Marketing',icon:'fa-bullhorn',color:'#ff9966'},
+{key:'telecom',label:'Télécom',icon:'fa-signal',color:'#cc6666'},
+{key:'autre',label:'Autre',icon:'fa-receipt',color:'#c9a97e'}
+];
+const EXP_STATUSES=[
+{key:'a_traiter',label:'À traiter',cls:'bg-warnS text-warn'},
+{key:'validee',label:'Validée',cls:'bg-infS text-inf'},
+{key:'remboursee',label:'Remboursée',cls:'bg-okS text-ok'}
+];
+const EXP_CAT_KEYWORDS={
+transport:['uber','taxi','sncf','cff','sbb','ffs','tpg','tram','bus','train','essence','carburant','parking','easyjet','swiss ','ryanair','location de voiture','rental car','bolt','lyft'],
+repas:['restaurant','café','brasserie','boulangerie','pizzeria','mcdonald','starbucks','traiteur','snack','bar à','bistrot'],
+hebergement:['hotel','hôtel','booking.com','airbnb','auberge','motel'],
+telecom:['swisscom','sunrise','salt','orange','sfr','free mobile','bouygues'],
+logiciel:['adobe','microsoft','google workspace','notion','figma','github','openai','anthropic','zoom','slack','canva pro','dropbox'],
+fournitures:['office depot','papeterie','migros','coop','fnac','manor','imprimerie','staples'],
+marketing:['facebook ads','google ads','linkedin ads','canva','mailchimp','hubspot']
+};
+
+function expCat(key){return EXP_CATEGORIES.find(c=>c.key===key)||EXP_CATEGORIES[EXP_CATEGORIES.length-1];}
+function expStatus(key){return EXP_STATUSES.find(s=>s.key===key)||EXP_STATUSES[0];}
+function expFmtAmount(a,cur){return(a||0).toLocaleString('fr-CH',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(cur||'CHF');}
+
+S.exf=S.exf||{cat:'all',status:'all',folder:'all',q:''};
+function setExf(k,v){S.exf[k]=v;rExpenses();}
+
+function filteredExpenses(){
+let list=EXP.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.createdAt||0)-(a.createdAt||0));
+if(S.exf.cat!=='all')list=list.filter(x=>x.category===S.exf.cat);
+if(S.exf.status!=='all')list=list.filter(x=>x.status===S.exf.status);
+if(S.exf.folder!=='all')list=list.filter(x=>(x.folder||'')===S.exf.folder);
+if(S.exf.q){const q=S.exf.q.toLowerCase();list=list.filter(x=>(x.vendor||'').toLowerCase().includes(q)||(x.note||'').toLowerCase().includes(q));}
+return list;
+}
+
+/* ===== RENDU ===== */
+window.rExpenses=function(){
+const list=filteredExpenses();
+const total=list.reduce((s,x)=>s+(x.amount||0),0);
+const pendingPhotos=EXP.filter(x=>x.photoSyncStatus==='pending').length;
+let h=`<div class="max-w-6xl mx-auto">
+<div class="flex flex-wrap items-center justify-between gap-3 mb-6 af">
+<h2 class="font-disp text-2xl font-bold flex items-center gap-2"><i class="fa-solid fa-receipt text-acc"></i>Notes de frais</h2>
+<div class="flex flex-wrap gap-2">
+${pendingPhotos?`<button onclick="retryPendingExpensePhotos()" class="h-9 px-3 rounded-xl bg-warnS text-warn text-xs font-medium hover:brightness-110 bp"><i class="fa-solid fa-cloud-arrow-up mr-1"></i>${pendingPhotos} photo${pendingPhotos>1?'s':''} en attente</button>`:''}
+<button onclick="expExportCsv()" class="h-9 px-4 rounded-xl bg-sAlt border border-bdr text-xs font-medium hover:bg-sHov transition-colors bp"><i class="fa-solid fa-file-csv mr-1"></i>Exporter CSV</button>
+<button onclick="openExpenseCaptureM()" class="h-9 px-4 rounded-xl bg-acc hover:bg-accH text-black text-xs font-semibold transition-colors bp"><i class="fa-solid fa-camera mr-1"></i>Nouvelle note de frais</button>
+</div>
+</div>
+
+<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+<div class="kpi bg-gradient-to-br from-[#ff9c00] to-[#cc7a33] af"><div class="font-disp text-2xl font-bold">${list.length}</div><div class="text-xs opacity-90 mt-1">Notes (filtrées)</div></div>
+<div class="kpi bg-gradient-to-br from-[#9999ff] to-[#7a7acc] af"><div class="font-disp text-2xl font-bold">${expFmtAmount(total,'CHF')}</div><div class="text-xs opacity-90 mt-1">Total filtré</div></div>
+<div class="kpi bg-gradient-to-br from-[#5fbf8f] to-[#3d8f68] af"><div class="font-disp text-2xl font-bold">${EXP.filter(x=>x.status==='a_traiter').length}</div><div class="text-xs opacity-90 mt-1">À traiter</div></div>
+<div class="kpi bg-gradient-to-br from-[#cc6666] to-[#a34d66] af"><div class="font-disp text-2xl font-bold">${EXP.filter(x=>x.status==='remboursee').length}</div><div class="text-xs opacity-90 mt-1">Remboursées</div></div>
+</div>
+
+<div class="flex flex-wrap gap-1.5 mb-3">
+<button onclick="setExf('cat','all')" class="chip ${S.exf.cat==='all'?'act':''}">Catégorie : Toutes</button>
+${EXP_CATEGORIES.map(c=>`<button onclick="setExf('cat','${c.key}')" class="chip ${S.exf.cat===c.key?'act':''}"><i class="fa-solid ${c.icon} mr-1"></i>${c.label}</button>`).join('')}
+</div>
+<div class="flex flex-wrap gap-1.5 mb-5 items-center">
+<button onclick="setExf('status','all')" class="chip ${S.exf.status==='all'?'act':''}">Statut : Tous</button>
+${EXP_STATUSES.map(s=>`<button onclick="setExf('status','${s.key}')" class="chip ${S.exf.status===s.key?'act':''}">${s.label}</button>`).join('')}
+<select onchange="setExf('folder',this.value)" class="fi py-1.5 text-xs w-auto ml-2"><option value="all">Tous les dossiers</option>${FOLDERS.map(f=>`<option value="${f.key}" ${S.exf.folder===f.key?'selected':''}>${escHtml(f.name)}</option>`).join('')}</select>
+<input type="text" placeholder="Rechercher fournisseur / note..." value="${escHtml(S.exf.q)}" oninput="setExf('q',this.value)" class="fi py-1.5 text-xs w-56 ml-auto">
+</div>
+
+<div class="flex flex-col gap-2 mb-8">
+${list.length===0?'<div class="text-center py-10 text-mut text-sm bg-surface border border-bdr rounded-xl">Aucune note de frais pour ce filtre</div>':''}
+${list.map(x=>expRow(x)).join('')}
+</div>
+</div>`;
+document.getElementById('PC').innerHTML=h;
+};
+
+function expRow(x){
+const c=expCat(x.category),st=expStatus(x.status);
+const f=x.folder?fldr(x.folder):null;
+const photoIcon=x.photoSyncStatus==='pending'?'<i class="fa-solid fa-cloud-arrow-up text-warn" title="Photo en attente d\'envoi"></i>':(x.photoUrl?'<i class="fa-solid fa-image text-ok" title="Photo synchronisée"></i>':'<i class="fa-solid fa-image-slash text-mut" title="Pas de photo"></i>');
+return`<div class="flex items-center gap-3 p-3.5 rounded-lg bg-surface border border-bdr hover:border-acc/30 cursor-pointer transition-colors" onclick="openExpenseDetailM(${x.id})">
+<div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style="background:${c.color}22;color:${c.color}"><i class="fa-solid ${c.icon}"></i></div>
+<div class="flex-1 min-w-0">
+<div class="text-sm font-medium truncate">${escHtml(x.vendor)||'Sans nom'}</div>
+<div class="flex flex-wrap gap-1.5 mt-1 items-center text-[.65rem] text-mut">
+<span>${fmtFr(x.date)}</span>
+${f?`<span class="px-1.5 py-0.5 rounded-full bg-infS text-inf">${escHtml(f.name)}</span>`:''}
+<span class="px-1.5 py-0.5 rounded-full ${st.cls}">${st.label}</span>
+${photoIcon}
+</div>
+</div>
+<div class="font-disp font-bold text-sm shrink-0">${expFmtAmount(x.amount,x.currency)}</div>
+</div>`;
+}
+
+/* ===== OCR (Tesseract.js chargé à la demande) ===== */
+let _tesseractLoading=null;
+function loadTesseract(){
+if(window.Tesseract)return Promise.resolve();
+if(_tesseractLoading)return _tesseractLoading;
+_tesseractLoading=new Promise((resolve,reject)=>{
+const s=document.createElement('script');
+s.src='https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js';
+s.onload=()=>resolve();
+s.onerror=()=>reject(new Error('Impossible de charger le module OCR (connexion internet ?)'));
+document.head.appendChild(s);
+});
+return _tesseractLoading;
+}
+async function ocrExtractText(dataUrl){
+await loadTesseract();
+const res=await window.Tesseract.recognize(dataUrl,'fra+eng');
+return(res&&res.data&&res.data.text)||'';
+}
+function parseExpenseFromOcr(text){
+const res={amount:null,date:'',vendor:''};
+const lines=(text||'').split(/\n/).map(l=>l.trim()).filter(Boolean);
+const amountRegex=/(\d{1,3}(?:[.\s'’]\d{3})*(?:[.,]\d{2}))\s*(chf|eur|€|fr\.?|usd|\$)?/i;
+const candidates=[];
+lines.forEach(line=>{
+const m=line.match(amountRegex);
+if(m){
+const raw=m[1].replace(/[\s'’]/g,'').replace(',','.');
+const val=parseFloat(raw);
+if(!isNaN(val)&&val>0&&val<100000){
+const boost=/total|montant|net.*payer|à payer|amount due|solde/i.test(line)?1000:0;
+candidates.push({val,boost});
+}
+}
+});
+if(candidates.length){candidates.sort((a,b)=>(b.boost-a.boost)||(b.val-a.val));res.amount=candidates[0].val;}
+const dateRegex=/(\d{2})[.\/-](\d{2})[.\/-](\d{4})|(\d{4})-(\d{2})-(\d{2})/;
+for(const line of lines){
+const m=line.match(dateRegex);
+if(m){res.date=m[1]?`${m[3]}-${m[2]}-${m[1]}`:`${m[4]}-${m[5]}-${m[6]}`;break;}
+}
+for(const line of lines.slice(0,6)){
+if(line.length>=3&&line.length<=40&&!/^\d+$/.test(line)&&!dateRegex.test(line)){res.vendor=line;break;}
+}
+return res;
+}
+function suggestExpenseCategory(text){
+const t=(text||'').toLowerCase();
+for(const cat in EXP_CAT_KEYWORDS){if(EXP_CAT_KEYWORDS[cat].some(k=>t.includes(k)))return cat;}
+return'autre';
+}
+
+/* ===== COMPRESSION IMAGE (même principe que handleLogoFile) ===== */
+function compressImageFile(file,maxDim,quality){
+return new Promise((resolve,reject)=>{
+const reader=new FileReader();
+reader.onload=e=>{
+const img=new Image();
+img.onload=()=>{
+const w=img.naturalWidth,h=img.naturalHeight;
+const scale=Math.min(1,maxDim/Math.max(w,h));
+const nw=Math.max(1,Math.round(w*scale)),nh=Math.max(1,Math.round(h*scale));
+const canvas=document.createElement('canvas');
+canvas.width=nw;canvas.height=nh;
+canvas.getContext('2d').drawImage(img,0,0,nw,nh);
+resolve(canvas.toDataURL('image/jpeg',quality||0.82));
+};
+img.onerror=()=>reject(new Error('Image illisible'));
+img.src=e.target.result;
+};
+reader.onerror=()=>reject(new Error('Erreur de lecture du fichier'));
+reader.readAsDataURL(file);
+});
+}
+
+/* ===== FIREBASE STORAGE (photos uniquement, jamais dans Firestore) ===== */
+function fbStorageReady(){return!!(FB.app&&FB.storage&&FB.uid);}
+async function uploadExpensePhoto(expenseId,dataUrl){
+if(!fbStorageReady())return null;
+const blob=dataUrlToBlob(dataUrl);
+const path='expenses/'+FB.uid+'/'+expenseId+'.jpg';
+const ref=FB.storage.ref().child(path);
+await ref.put(blob,{contentType:'image/jpeg'});
+const url=await ref.getDownloadURL();
+return{path,url};
+}
+async function deleteExpensePhoto(path){
+if(!fbStorageReady()||!path)return;
+try{await FB.storage.ref().child(path).delete();}catch(e){/* ignore */}
+}
+window.retryPendingExpensePhotos=async function(){
+if(!fbStorageReady()){toast('Connecte le cloud (Google) pour envoyer les photos en attente','err');return;}
+const pending=EXP.filter(x=>x.photoSyncStatus==='pending');
+if(!pending.length){toast('Aucune photo en attente','info');return;}
+toast('Envoi de '+pending.length+' photo(s) en cours...','info');
+let ok=0;
+for(const exp of pending){
+const dataUrl=expGetPendingPhoto(exp.id);
+if(!dataUrl)continue;
+try{
+const up=await uploadExpensePhoto(exp.id,dataUrl);
+if(up){exp.photoPath=up.path;exp.photoUrl=up.url;exp.photoSyncStatus='synced';expClearPendingPhoto(exp.id);ok++;}
+}catch(err){console.error('[Expenses] retry upload erreur',err);}
+}
+svExpenses();
+if(S.v==='expenses')rExpenses();
+toast(ok+' photo(s) synchronisée(s)'+(ok<pending.length?' · '+(pending.length-ok)+' échec(s), réessaie plus tard':''),ok===pending.length?'ok':'info');
+};
+/* Relance automatique quand une sync cloud arrive (connexion, reconnexion...) */
+window._onExpensesSynced=function(){if(fbStorageReady())retryPendingExpensePhotos();if(S.v==='expenses')rExpenses();};
+
+/* ===== MODAL CAPTURE / ÉDITION ===== */
+let _pendingExpensePhoto=null;
+window.openExpenseCaptureM=function(existingId){
+const ex=existingId?EXP.find(x=>x.id===existingId):null;
+_pendingExpensePhoto=null;
+const existingPhoto=ex?(ex.photoUrl||expGetPendingPhoto(ex.id)||''):'';
+opM(`<div class="p-6">
+<h2 class="font-disp font-bold text-lg mb-1"><i class="fa-solid fa-receipt text-acc mr-1"></i>${ex?'Modifier la note de frais':'Nouvelle note de frais'}</h2>
+<p class="text-xs text-mut mb-4">Photographie ou importe une facture — le texte est analysé automatiquement (OCR local, gratuit) pour préremplir les champs. Vérifie et corrige avant d'enregistrer.</p>
+<div class="mb-4">
+<div class="fd-zone p-4 text-center cursor-pointer" onclick="document.getElementById('expPhotoInput').click()">
+<img id="expPhotoPreview" src="${existingPhoto}" class="max-h-48 mx-auto rounded-lg mb-2 object-contain ${existingPhoto?'':'hidden'}">
+<i id="expPhotoIcon" class="fa-solid fa-camera text-2xl text-mut mb-2 block ${existingPhoto?'hidden':''}"></i>
+<div class="text-xs text-mut">Cliquez pour prendre une photo ou choisir un fichier</div>
+<input type="file" id="expPhotoInput" accept="image/*" capture="environment" class="hidden" onchange="handleExpensePhoto(this)">
+</div>
+<div id="expOcrStatus" class="text-[.65rem] text-mut mt-2"></div>
+</div>
+<form onsubmit="svExpense(event)" class="flex flex-col gap-3">
+<input type="hidden" name="id" value="${ex?ex.id:''}">
+<div class="grid grid-cols-2 gap-3">
+<div><label class="text-[.65rem] text-mut block mb-1">Date</label><input type="date" id="expDate" name="date" value="${ex?ex.date:todayStr()}" class="fi text-sm"></div>
+<div class="grid grid-cols-3 gap-2">
+<div class="col-span-2"><label class="text-[.65rem] text-mut block mb-1">Montant</label><input type="number" step="0.01" id="expAmount" name="amount" value="${ex&&ex.amount?ex.amount:''}" class="fi text-sm" placeholder="0.00"></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Devise</label><select name="currency" class="fi text-sm"><option ${(!ex||ex.currency==='CHF')?'selected':''}>CHF</option><option ${ex&&ex.currency==='EUR'?'selected':''}>EUR</option><option ${ex&&ex.currency==='USD'?'selected':''}>USD</option></select></div>
+</div>
+</div>
+<div><label class="text-[.65rem] text-mut block mb-1">Fournisseur</label><input type="text" id="expVendor" name="vendor" value="${ex?escHtml(ex.vendor):''}" class="fi text-sm" placeholder="Ex : Migros, SNCF, Hôtel..." required></div>
+<div class="grid grid-cols-2 gap-3">
+<div><label class="text-[.65rem] text-mut block mb-1">Catégorie</label><select id="expCategory" name="category" class="fi text-sm">${EXP_CATEGORIES.map(c=>`<option value="${c.key}" ${ex&&ex.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Dossier lié (optionnel)</label><select name="folder" class="fi text-sm"><option value="">Aucun</option>${FOLDERS.map(f=>`<option value="${f.key}" ${ex&&ex.folder===f.key?'selected':''}>${escHtml(f.name)}</option>`).join('')}</select></div>
+</div>
+<div><label class="text-[.65rem] text-mut block mb-1">Statut</label><select name="status" class="fi text-sm">${EXP_STATUSES.map(s=>`<option value="${s.key}" ${ex&&ex.status===s.key?'selected':''}>${s.label}</option>`).join('')}</select></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Note</label><textarea name="note" rows="2" class="fi text-sm">${ex?escHtml(ex.note):''}</textarea></div>
+<div class="flex justify-end gap-3 mt-2"><button type="button" onclick="clsM()" class="h-10 px-5 rounded-xl bg-sAlt border border-bdr text-sm font-medium hover:bg-sHov transition-colors bp">Annuler</button><button type="submit" class="h-10 px-5 rounded-xl bg-acc hover:bg-accH text-black text-sm font-semibold transition-colors bp">Enregistrer</button></div>
+</form>
+</div>`);
+};
+
+window.handleExpensePhoto=function(input){
+const file=input.files&&input.files[0];
+if(!file)return;
+const statusEl=document.getElementById('expOcrStatus');
+if(statusEl)statusEl.textContent='Lecture de l\'image...';
+compressImageFile(file,1600,0.82).then(dataUrl=>{
+_pendingExpensePhoto={dataUrl};
+const prev=document.getElementById('expPhotoPreview'),icon=document.getElementById('expPhotoIcon');
+if(prev){prev.src=dataUrl;prev.classList.remove('hidden');}
+if(icon)icon.classList.add('hidden');
+if(statusEl)statusEl.textContent='Analyse OCR en cours (peut prendre quelques secondes)...';
+return ocrExtractText(dataUrl);
+}).then(text=>{
+if(_pendingExpensePhoto)_pendingExpensePhoto.ocrText=text;
+const parsed=parseExpenseFromOcr(text);
+const amtEl=document.getElementById('expAmount'),dateEl=document.getElementById('expDate'),vendEl=document.getElementById('expVendor'),catEl=document.getElementById('expCategory');
+if(parsed.amount&&amtEl)amtEl.value=parsed.amount;
+if(parsed.date&&dateEl)dateEl.value=parsed.date;
+if(parsed.vendor&&vendEl&&!vendEl.value)vendEl.value=parsed.vendor;
+if(catEl)catEl.value=suggestExpenseCategory((parsed.vendor||'')+' '+text);
+if(statusEl)statusEl.textContent='OCR terminé — vérifie les champs ci-dessous avant d\'enregistrer.';
+}).catch(err=>{
+console.error('[Expenses] OCR erreur',err);
+if(statusEl)statusEl.textContent='OCR indisponible (hors-ligne ?) — remplis les champs manuellement.';
+});
+};
+
+window.svExpense=async function(e){
+e.preventDefault();
+const f=new FormData(e.target);
+const id=f.get('id')?parseInt(f.get('id'),10):null;
+const data={
+date:f.get('date')||todayStr(),
+amount:parseFloat(String(f.get('amount')||'0').replace(',','.'))||0,
+currency:f.get('currency')||'CHF',
+vendor:(f.get('vendor')||'').trim(),
+category:f.get('category')||'autre',
+folder:f.get('folder')||null,
+note:(f.get('note')||'').trim(),
+status:f.get('status')||'a_traiter'
+};
+if(!data.vendor){toast('Indique au moins un fournisseur','err');return;}
+let exp,isNew=false;
+if(id){exp=EXP.find(x=>x.id===id);if(exp)Object.assign(exp,data);}
+if(!exp){isNew=true;exp=Object.assign({id:gid(EXP),ocrText:'',photoPath:'',photoUrl:'',photoSyncStatus:'none',createdAt:Date.now()},data);EXP.push(exp);}
+const pending=_pendingExpensePhoto;
+_pendingExpensePhoto=null;
+if(pending&&pending.ocrText)exp.ocrText=pending.ocrText;
+const hasPendingPhoto=!!(pending&&pending.dataUrl);
+/* Important : on met de côté la photo en attente et on sauvegarde AVANT d'appeler ren().
+   Si le rendu échoue pour une raison quelconque (ex. Chart.js pas encore chargé), la note de
+   frais et sa photo sont déjà persistées — rien n'est perdu. */
+if(hasPendingPhoto){
+expSavePendingPhoto(exp.id,pending.dataUrl);
+exp.photoSyncStatus='pending';
+}
+svExpenses();
+try{clsM();ren();}catch(renderErr){console.error('[Expenses] Erreur de rendu après sauvegarde (les données sont bien enregistrées) :',renderErr);}
+toast(isNew?'Note de frais ajoutée':'Note de frais modifiée');
+if(hasPendingPhoto){
+if(fbStorageReady()){
+try{
+const up=await uploadExpensePhoto(exp.id,pending.dataUrl);
+if(up){exp.photoPath=up.path;exp.photoUrl=up.url;exp.photoSyncStatus='synced';expClearPendingPhoto(exp.id);svExpenses();if(S.v==='expenses')rExpenses();toast('Photo synchronisée sur le cloud','ok');}
+}catch(err){console.error('[Expenses] upload erreur',err);toast('Photo gardée sur cet appareil — l\'envoi cloud a échoué, nouvelle tentative plus tard','err');}
+}else{
+toast('Cloud non connecté : la photo reste sur cet appareil pour l\'instant','info');
+}
+}
+};
+
+/* ===== DÉTAIL / STATUT / SUPPRESSION ===== */
+window.openExpenseDetailM=function(id){
+const x=EXP.find(e=>e.id===id);if(!x)return;
+const c=expCat(x.category);
+const photoSrc=x.photoUrl||expGetPendingPhoto(x.id)||'';
+opM(`<div class="p-6">
+<div class="flex items-start justify-between mb-4"><h2 class="font-disp font-bold text-lg">${escHtml(x.vendor)||'Note de frais'}</h2><button onclick="clsM()" class="w-8 h-8 rounded-lg hover:bg-sHov flex items-center justify-center text-mut"><i class="fa-solid fa-xmark"></i></button></div>
+${photoSrc?`<img src="${photoSrc}" class="w-full max-h-80 object-contain rounded-lg border border-bdr mb-4 bg-black/40" alt="Facture">`:'<div class="w-full h-24 rounded-lg border border-bdr mb-4 flex items-center justify-center text-mut text-xs">Pas de photo</div>'}
+<div class="grid grid-cols-2 gap-3 text-sm mb-4">
+<div><div class="text-[.65rem] text-mut uppercase">Montant</div><div class="font-disp font-bold">${expFmtAmount(x.amount,x.currency)}</div></div>
+<div><div class="text-[.65rem] text-mut uppercase">Date</div><div>${fmtFr(x.date)}</div></div>
+<div><div class="text-[.65rem] text-mut uppercase">Catégorie</div><div><i class="fa-solid ${c.icon} mr-1"></i>${c.label}</div></div>
+<div><div class="text-[.65rem] text-mut uppercase">Dossier</div><div>${x.folder&&fldr(x.folder)?escHtml(fldr(x.folder).name):'—'}</div></div>
+</div>
+${x.note?`<div class="text-xs text-mut mb-4"><span class="uppercase text-[.6rem]">Note</span><br>${escHtml(x.note)}</div>`:''}
+${x.ocrText?`<details class="mb-4"><summary class="text-[.65rem] text-mut cursor-pointer uppercase">Texte OCR brut</summary><pre class="text-[.65rem] text-mut whitespace-pre-wrap mt-2 bg-sAlt p-2 rounded-lg max-h-32 overflow-y-auto">${escHtml(x.ocrText)}</pre></details>`:''}
+<div class="flex flex-wrap gap-2 mb-2">
+${EXP_STATUSES.map(s=>`<button onclick="expSetStatus(${x.id},'${s.key}')" class="chip ${x.status===s.key?'act':''}">${s.label}</button>`).join('')}
+</div>
+<div class="flex justify-between gap-3 mt-4">
+<button onclick="delExpense(${x.id})" class="h-10 px-4 rounded-xl bg-accS text-acc text-sm font-medium hover:bg-accS/70 transition-colors bp"><i class="fa-solid fa-trash mr-1"></i>Supprimer</button>
+<button onclick="clsM();openExpenseCaptureM(${x.id})" class="h-10 px-4 rounded-xl bg-sAlt border border-bdr text-sm font-medium hover:bg-sHov transition-colors bp"><i class="fa-solid fa-pen mr-1"></i>Modifier</button>
+</div>
+</div>`);
+};
+window.expSetStatus=function(id,status){const x=EXP.find(e=>e.id===id);if(!x)return;x.status=status;svExpenses();clsM();if(S.v==='expenses')rExpenses();toast('Statut mis à jour');};
+window.delExpense=function(id){
+if(!confirm('Supprimer cette note de frais ? La photo associée sera aussi supprimée du cloud.'))return;
+const x=EXP.find(e=>e.id===id);
+if(x&&x.photoPath)deleteExpensePhoto(x.photoPath);
+if(x)expClearPendingPhoto(x.id);
+EXP=EXP.filter(e=>e.id!==id);
+svExpenses();clsM();if(S.v==='expenses')rExpenses();
+toast('Note de frais supprimée','info');
+};
+
+/* ===== EXPORT CSV (pour comptabilité / remboursement) ===== */
+window.expExportCsv=function(){
+const list=filteredExpenses();
+if(!list.length){toast('Rien à exporter avec ce filtre','info');return;}
+const rows=[['Date','Fournisseur','Montant','Devise','Catégorie','Statut','Dossier','Note']];
+list.forEach(x=>{
+rows.push([x.date,x.vendor,x.amount,x.currency,expCat(x.category).label,expStatus(x.status).label,x.folder&&fldr(x.folder)?fldr(x.folder).name:'',x.note||'']);
+});
+const csv=rows.map(r=>r.map(v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"').join(';')).join('\n');
+const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
+const url=URL.createObjectURL(blob);
+downloadBlob(url,'notes_de_frais_'+todayStr()+'.csv');
+setTimeout(()=>URL.revokeObjectURL(url),2000);
+};
+
+console.log('[Expenses Module] Loaded —',EXP.length,'notes de frais');
+})();
 </script>
 </body>
 </html>
