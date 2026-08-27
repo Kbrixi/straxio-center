@@ -9563,15 +9563,38 @@ marketing:['facebook ads','google ads','linkedin ads','canva','mailchimp','hubsp
 function expCat(key){return EXP_CATEGORIES.find(c=>c.key===key)||EXP_CATEGORIES[EXP_CATEGORIES.length-1];}
 function expStatus(key){return EXP_STATUSES.find(s=>s.key===key)||EXP_STATUSES[0];}
 function expFmtAmount(a,cur){return(a||0).toLocaleString('fr-CH',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(cur||'CHF');}
+/* Une note de frais a une devise propre (CHF/EUR/USD) : on ne les additionne jamais
+   entre elles — un total regroupe toujours par devise avant affichage. */
+function expSumByCurrency(list){const m={};list.forEach(x=>{const cur=x.currency||'CHF';m[cur]=(m[cur]||0)+(x.amount||0);});return m;}
+function expFmtSums(sums){const keys=Object.keys(sums);if(!keys.length)return expFmtAmount(0,'CHF');return keys.map(cur=>expFmtAmount(sums[cur],cur)).join(' · ');}
 
-S.exf=S.exf||{cat:'all',status:'all',folder:'all',q:''};
-function setExf(k,v){S.exf[k]=v;rExpenses();}
+const EXP_MONTHS_FR=['Janvier','Février','Mars','Avril','Mai','Juin','Juillet','Août','Septembre','Octobre','Novembre','Décembre'];
+function expMonthKey(dateStr){return dateStr?dateStr.slice(0,7):'';}
+function expMonthLabel(monthKey){if(!monthKey)return'—';const[y,m]=monthKey.split('-');return(EXP_MONTHS_FR[parseInt(m,10)-1]||m)+' '+y;}
+/* Totaux par mois calendaire (mois de l'échéance/date de la facture), regroupés par devise,
+   du plus récent au plus ancien. */
+function expMonthlyTotals(){
+const map={};
+EXP.forEach(x=>{
+const k=expMonthKey(x.date);
+if(!k)return;
+if(!map[k])map[k]={count:0,sums:{}};
+map[k].count++;
+const cur=x.currency||'CHF';
+map[k].sums[cur]=(map[k].sums[cur]||0)+(x.amount||0);
+});
+return Object.keys(map).sort((a,b)=>b.localeCompare(a)).map(k=>({key:k,label:expMonthLabel(k),count:map[k].count,sums:map[k].sums}));
+}
+
+S.exf=S.exf||{cat:'all',status:'all',folder:'all',month:'all',q:''};
+window.setExf=function(k,v){S.exf[k]=v;rExpenses();};
 
 function filteredExpenses(){
 let list=EXP.slice().sort((a,b)=>(b.date||'').localeCompare(a.date||'')||(b.createdAt||0)-(a.createdAt||0));
 if(S.exf.cat!=='all')list=list.filter(x=>x.category===S.exf.cat);
 if(S.exf.status!=='all')list=list.filter(x=>x.status===S.exf.status);
 if(S.exf.folder!=='all')list=list.filter(x=>(x.folder||'')===S.exf.folder);
+if(S.exf.month!=='all')list=list.filter(x=>expMonthKey(x.date)===S.exf.month);
 if(S.exf.q){const q=S.exf.q.toLowerCase();list=list.filter(x=>(x.vendor||'').toLowerCase().includes(q)||(x.note||'').toLowerCase().includes(q));}
 return list;
 }
@@ -9579,7 +9602,7 @@ return list;
 /* ===== RENDU ===== */
 window.rExpenses=function(){
 const list=filteredExpenses();
-const total=list.reduce((s,x)=>s+(x.amount||0),0);
+const monthly=expMonthlyTotals();
 const pendingPhotos=EXP.filter(x=>x.photoSyncStatus==='pending').length;
 let h=`<div class="max-w-6xl mx-auto">
 <div class="flex flex-wrap items-center justify-between gap-3 mb-6 af">
@@ -9593,7 +9616,7 @@ ${pendingPhotos?`<button onclick="retryPendingExpensePhotos()" class="h-9 px-3 r
 
 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
 <div class="kpi bg-gradient-to-br from-[#ff9c00] to-[#cc7a33] af"><div class="font-disp text-2xl font-bold">${list.length}</div><div class="text-xs opacity-90 mt-1">Notes (filtrées)</div></div>
-<div class="kpi bg-gradient-to-br from-[#9999ff] to-[#7a7acc] af"><div class="font-disp text-2xl font-bold">${expFmtAmount(total,'CHF')}</div><div class="text-xs opacity-90 mt-1">Total filtré</div></div>
+<div class="kpi bg-gradient-to-br from-[#9999ff] to-[#7a7acc] af"><div class="font-disp text-lg font-bold leading-tight">${expFmtSums(expSumByCurrency(list))}</div><div class="text-xs opacity-90 mt-1">Total filtré</div></div>
 <div class="kpi bg-gradient-to-br from-[#5fbf8f] to-[#3d8f68] af"><div class="font-disp text-2xl font-bold">${EXP.filter(x=>x.status==='a_traiter').length}</div><div class="text-xs opacity-90 mt-1">À traiter</div></div>
 <div class="kpi bg-gradient-to-br from-[#cc6666] to-[#a34d66] af"><div class="font-disp text-2xl font-bold">${EXP.filter(x=>x.status==='remboursee').length}</div><div class="text-xs opacity-90 mt-1">Remboursées</div></div>
 </div>
@@ -9606,8 +9629,22 @@ ${EXP_CATEGORIES.map(c=>`<button onclick="setExf('cat','${c.key}')" class="chip 
 <button onclick="setExf('status','all')" class="chip ${S.exf.status==='all'?'act':''}">Statut : Tous</button>
 ${EXP_STATUSES.map(s=>`<button onclick="setExf('status','${s.key}')" class="chip ${S.exf.status===s.key?'act':''}">${s.label}</button>`).join('')}
 <select onchange="setExf('folder',this.value)" class="fi py-1.5 text-xs w-auto ml-2"><option value="all">Tous les dossiers</option>${FOLDERS.map(f=>`<option value="${f.key}" ${S.exf.folder===f.key?'selected':''}>${escHtml(f.name)}</option>`).join('')}</select>
+<select onchange="setExf('month',this.value)" class="fi py-1.5 text-xs w-auto"><option value="all">Tous les mois</option>${monthly.map(m=>`<option value="${m.key}" ${S.exf.month===m.key?'selected':''}>${m.label}</option>`).join('')}</select>
 <input type="text" placeholder="Rechercher fournisseur / note..." value="${escHtml(S.exf.q)}" oninput="setExf('q',this.value)" class="fi py-1.5 text-xs w-56 ml-auto">
 </div>
+
+${monthly.length?`<div class="bg-surface border border-bdr rounded-xl p-4 mb-6">
+<h3 class="font-disp font-semibold text-xs mb-3 text-mut uppercase tracking-wider flex items-center gap-2"><i class="fa-solid fa-calendar-days text-acc"></i>Totaux par mois calendaire</h3>
+<div class="flex flex-col gap-1">
+${monthly.map(m=>`<div onclick="setExf('month','${S.exf.month===m.key?'all':m.key}')" class="flex items-center justify-between gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${S.exf.month===m.key?'bg-accS':'hover:bg-sAlt'}">
+<span class="text-sm ${S.exf.month===m.key?'text-acc font-medium':''}">${m.label}</span>
+<span class="flex items-center gap-3">
+<span class="text-[.65rem] text-mut">${m.count} note${m.count>1?'s':''}</span>
+<span class="font-disp font-bold text-sm">${expFmtSums(m.sums)}</span>
+</span>
+</div>`).join('')}
+</div>
+</div>`:''}
 
 <div class="flex flex-col gap-2 mb-8">
 ${list.length===0?'<div class="text-center py-10 text-mut text-sm bg-surface border border-bdr rounded-xl">Aucune note de frais pour ce filtre</div>':''}
