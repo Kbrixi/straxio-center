@@ -4775,6 +4775,7 @@ opM(`<div class="p-6"><h2 class="font-disp font-bold text-lg mb-5">Ajout rapide<
 <button onclick="clsM();openCM()" class="p-4 rounded-xl bg-sAlt border border-bdr hover:border-acc/30 hover:bg-accS/30 transition-all text-center group bp"><i class="fa-solid fa-user-plus text-xl text-acc mb-2 block group-hover:scale-110 transition-transform"></i><span class="text-xs font-semibold">Contact</span></button>
 <button onclick="openTaskPicker()" class="p-4 rounded-xl bg-sAlt border border-bdr hover:border-acc/30 hover:bg-accS/30 transition-all text-center group bp"><i class="fa-solid fa-list-check text-xl text-acc mb-2 block group-hover:scale-110 transition-transform"></i><span class="text-xs font-semibold">Tâche</span></button>
 <button onclick="clsM();S.v='marketing';S.mkv='campaigns';ren();openMkForm('campaigns')" class="p-4 rounded-xl bg-sAlt border border-bdr hover:border-acc/30 hover:bg-accS/30 transition-all text-center group bp"><i class="fa-solid fa-bullhorn text-xl text-acc mb-2 block group-hover:scale-110 transition-transform"></i><span class="text-xs font-semibold">Campagne</span></button>
+<button onclick="clsM();openExpenseCaptureM()" class="p-4 rounded-xl bg-sAlt border border-bdr hover:border-acc/30 hover:bg-accS/30 transition-all text-center group bp"><i class="fa-solid fa-receipt text-xl text-acc mb-2 block group-hover:scale-110 transition-transform"></i><span class="text-xs font-semibold">Note de frais</span></button>
 </div></div>`);
 }
 /* ===== CRÉATION RAPIDE DE TÂCHE (sans contexte projet) ===== */
@@ -9560,6 +9561,54 @@ fournitures:['office depot','papeterie','migros','coop','fnac','manor','imprimer
 marketing:['facebook ads','google ads','linkedin ads','canva','mailchimp','hubspot']
 };
 
+/* ===== CONFORMITÉ FISCALE — DEUX JURIDICTIONS (Suisse / France) =====
+   Suisse (TVA, art. 26 LTVA, AFC) : taux 8.1% normal / 3.8% hébergement / 2.6% réduit.
+   Sous CHF 400 TTC un ticket de caisse simplifié suffit ; au-delà, facture complète nominative
+   exigée pour récupérer la TVA.
+   France (TVA, DGFiP) : taux 20% normal / 10% intermédiaire (restauration, transport, hôtellerie)
+   / 5.5% réduit / 2.1% super réduit. Sous 150 € HT, facture simplifiée tolérée (dispense des
+   n° TVA intracommunautaires) ; au-delà, facture complète nominative recommandée.
+   Ces taux et seuils évoluent (votations en Suisse, lois de finances en France) — à revérifier
+   sur estv.admin.ch et economie.gouv.fr en cas de doute. */
+const EXP_JURISDICTIONS=[
+{key:'CH',label:'Suisse (AFC)',authority:'AFC',threshold:400,thresholdCur:'CHF',
+ vatRates:[
+ {key:'8.1',label:'8.1 % (taux normal)'},
+ {key:'3.8',label:'3.8 % (hébergement)'},
+ {key:'2.6',label:'2.6 % (taux réduit)'},
+ {key:'0',label:'0 % (exonéré)'},
+ {key:'na',label:'TVA non mentionnée / étranger'}
+ ]},
+{key:'FR',label:'France (DGFiP)',authority:'DGFiP',threshold:150,thresholdCur:'EUR',
+ vatRates:[
+ {key:'20',label:'20 % (taux normal)'},
+ {key:'10',label:'10 % (restauration, transport, hôtellerie)'},
+ {key:'5.5',label:'5.5 % (taux réduit)'},
+ {key:'2.1',label:'2.1 % (taux super réduit)'},
+ {key:'0',label:'0 % (exonéré)'},
+ {key:'na',label:'TVA non mentionnée / étranger'}
+ ]}
+];
+function expJur(key){return EXP_JURISDICTIONS.find(j=>j.key===key)||EXP_JURISDICTIONS[0];}
+function expVat(jurKey,rateKey){const j=expJur(jurKey);return j.vatRates.find(v=>v.key===rateKey)||j.vatRates[j.vatRates.length-1];}
+/* Devise par défaut associée à chaque juridiction, pour préremplir intelligemment le formulaire. */
+function expDefaultCurrency(jurKey){return jurKey==='FR'?'EUR':'CHF';}
+function expVatAmount(amount,rateKey){const r=parseFloat(rateKey);if(!amount||isNaN(r)||r<=0)return 0;return Math.round((amount-amount/(1+r/100))*100)/100;}
+/* Liste les points bloquants qui risquent de faire retoquer la note par le fisc (CH ou FR selon la juridiction choisie). */
+function expComplianceIssues(x){
+const issues=[];
+const jur=expJur(x.jurisdiction||'CH');
+if(x.expenseType!=='km'){
+if(!(x.photoUrl||expGetPendingPhoto(x.id)))issues.push('Photo du justificatif manquante');
+if(!x.vatRate)issues.push('Taux de TVA non renseigné');
+if(x.currency===jur.thresholdCur&&(x.amount||0)>=jur.threshold&&!x.fullInvoice)issues.push('Facture complète (nom du destinataire) requise dès '+jur.threshold+' '+jur.thresholdCur+' ('+jur.authority+')');
+}
+if(!x.note||!x.note.trim())issues.push('Motif professionnel manquant');
+if(x.category==='repas'&&!(x.attendees&&x.attendees.trim()))issues.push('Personnes présentes non renseignées (repas d\'affaires)');
+return issues;
+}
+function expIsCompliant(x){return expComplianceIssues(x).length===0;}
+
 function expCat(key){return EXP_CATEGORIES.find(c=>c.key===key)||EXP_CATEGORIES[EXP_CATEGORIES.length-1];}
 function expStatus(key){return EXP_STATUSES.find(s=>s.key===key)||EXP_STATUSES[0];}
 function expFmtAmount(a,cur){return(a||0).toLocaleString('fr-CH',{minimumFractionDigits:2,maximumFractionDigits:2})+' '+(cur||'CHF');}
@@ -9586,7 +9635,7 @@ map[k].sums[cur]=(map[k].sums[cur]||0)+(x.amount||0);
 return Object.keys(map).sort((a,b)=>b.localeCompare(a)).map(k=>({key:k,label:expMonthLabel(k),count:map[k].count,sums:map[k].sums}));
 }
 
-S.exf=S.exf||{cat:'all',status:'all',folder:'all',month:'all',q:''};
+S.exf=S.exf||{cat:'all',status:'all',folder:'all',month:'all',compliance:'all',q:''};
 window.setExf=function(k,v){S.exf[k]=v;rExpenses();};
 
 function filteredExpenses(){
@@ -9595,6 +9644,7 @@ if(S.exf.cat!=='all')list=list.filter(x=>x.category===S.exf.cat);
 if(S.exf.status!=='all')list=list.filter(x=>x.status===S.exf.status);
 if(S.exf.folder!=='all')list=list.filter(x=>(x.folder||'')===S.exf.folder);
 if(S.exf.month!=='all')list=list.filter(x=>expMonthKey(x.date)===S.exf.month);
+if(S.exf.compliance==='issues')list=list.filter(x=>!expIsCompliant(x));
 if(S.exf.q){const q=S.exf.q.toLowerCase();list=list.filter(x=>(x.vendor||'').toLowerCase().includes(q)||(x.note||'').toLowerCase().includes(q));}
 return list;
 }
@@ -9614,23 +9664,28 @@ ${pendingPhotos?`<button onclick="retryPendingExpensePhotos()" class="h-9 px-3 r
 </div>
 </div>
 
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+<div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
 <div class="kpi bg-gradient-to-br from-[#ff9c00] to-[#cc7a33] af"><div class="font-disp text-2xl font-bold">${list.length}</div><div class="text-xs opacity-90 mt-1">Notes (filtrées)</div></div>
 <div class="kpi bg-gradient-to-br from-[#9999ff] to-[#7a7acc] af"><div class="font-disp text-lg font-bold leading-tight">${expFmtSums(expSumByCurrency(list))}</div><div class="text-xs opacity-90 mt-1">Total filtré</div></div>
 <div class="kpi bg-gradient-to-br from-[#5fbf8f] to-[#3d8f68] af"><div class="font-disp text-2xl font-bold">${EXP.filter(x=>x.status==='a_traiter').length}</div><div class="text-xs opacity-90 mt-1">À traiter</div></div>
 <div class="kpi bg-gradient-to-br from-[#cc6666] to-[#a34d66] af"><div class="font-disp text-2xl font-bold">${EXP.filter(x=>x.status==='remboursee').length}</div><div class="text-xs opacity-90 mt-1">Remboursées</div></div>
+<div class="kpi bg-gradient-to-br from-[#ff6666] to-[#a33333] af cursor-pointer" onclick="setExf('compliance','${S.exf.compliance==='issues'?'all':'issues'}')"><div class="font-disp text-2xl font-bold">${EXP.filter(x=>!expIsCompliant(x)).length}</div><div class="text-xs opacity-90 mt-1"><i class="fa-solid fa-triangle-exclamation mr-1"></i>À corriger</div></div>
 </div>
 
 <div class="flex flex-wrap gap-1.5 mb-3">
 <button onclick="setExf('cat','all')" class="chip ${S.exf.cat==='all'?'act':''}">Catégorie : Toutes</button>
 ${EXP_CATEGORIES.map(c=>`<button onclick="setExf('cat','${c.key}')" class="chip ${S.exf.cat===c.key?'act':''}"><i class="fa-solid ${c.icon} mr-1"></i>${c.label}</button>`).join('')}
 </div>
-<div class="flex flex-wrap gap-1.5 mb-5 items-center">
+<div class="flex flex-wrap gap-1.5 mb-3 items-center">
 <button onclick="setExf('status','all')" class="chip ${S.exf.status==='all'?'act':''}">Statut : Tous</button>
 ${EXP_STATUSES.map(s=>`<button onclick="setExf('status','${s.key}')" class="chip ${S.exf.status===s.key?'act':''}">${s.label}</button>`).join('')}
 <select onchange="setExf('folder',this.value)" class="fi py-1.5 text-xs w-auto ml-2"><option value="all">Tous les dossiers</option>${FOLDERS.map(f=>`<option value="${f.key}" ${S.exf.folder===f.key?'selected':''}>${escHtml(f.name)}</option>`).join('')}</select>
 <select onchange="setExf('month',this.value)" class="fi py-1.5 text-xs w-auto"><option value="all">Tous les mois</option>${monthly.map(m=>`<option value="${m.key}" ${S.exf.month===m.key?'selected':''}>${m.label}</option>`).join('')}</select>
 <input type="text" placeholder="Rechercher fournisseur / note..." value="${escHtml(S.exf.q)}" oninput="setExf('q',this.value)" class="fi py-1.5 text-xs w-56 ml-auto">
+</div>
+<div class="flex flex-wrap gap-1.5 mb-5 items-center">
+<button onclick="setExf('compliance','all')" class="chip ${S.exf.compliance==='all'?'act':''}">Conformité : Toutes</button>
+<button onclick="setExf('compliance','issues')" class="chip ${S.exf.compliance==='issues'?'act':''}"><i class="fa-solid fa-triangle-exclamation mr-1"></i>À corriger seulement</button>
 </div>
 
 ${monthly.length?`<div class="bg-surface border border-bdr rounded-xl p-4 mb-6">
@@ -9657,7 +9712,9 @@ document.getElementById('PC').innerHTML=h;
 function expRow(x){
 const c=expCat(x.category),st=expStatus(x.status);
 const f=x.folder?fldr(x.folder):null;
-const photoIcon=x.photoSyncStatus==='pending'?'<i class="fa-solid fa-cloud-arrow-up text-warn" title="Photo en attente d\'envoi"></i>':(x.photoUrl?'<i class="fa-solid fa-image text-ok" title="Photo synchronisée"></i>':'<i class="fa-solid fa-image-slash text-mut" title="Pas de photo"></i>');
+const photoIcon=x.expenseType==='km'?'<i class="fa-solid fa-road text-mut" title="Indemnité kilométrique"></i>':(x.photoSyncStatus==='pending'?'<i class="fa-solid fa-cloud-arrow-up text-warn" title="Photo en attente d\'envoi"></i>':(x.photoUrl?'<i class="fa-solid fa-image text-ok" title="Photo synchronisée"></i>':'<i class="fa-solid fa-image-slash text-mut" title="Pas de photo"></i>'));
+const issues=expComplianceIssues(x);
+const complianceIcon=issues.length?`<i class="fa-solid fa-triangle-exclamation text-acc" title="${escHtml(issues.join(' · '))}"></i>`:'<i class="fa-solid fa-circle-check text-ok" title="Conforme"></i>';
 return`<div class="flex items-center gap-3 p-3.5 rounded-lg bg-surface border border-bdr hover:border-acc/30 cursor-pointer transition-colors" onclick="openExpenseDetailM(${x.id})">
 <div class="w-10 h-10 rounded-lg flex items-center justify-center shrink-0" style="background:${c.color}22;color:${c.color}"><i class="fa-solid ${c.icon}"></i></div>
 <div class="flex-1 min-w-0">
@@ -9667,6 +9724,7 @@ return`<div class="flex items-center gap-3 p-3.5 rounded-lg bg-surface border bo
 ${f?`<span class="px-1.5 py-0.5 rounded-full bg-infS text-inf">${escHtml(f.name)}</span>`:''}
 <span class="px-1.5 py-0.5 rounded-full ${st.cls}">${st.label}</span>
 ${photoIcon}
+${complianceIcon}
 </div>
 </div>
 <div class="font-disp font-bold text-sm shrink-0">${expFmtAmount(x.amount,x.currency)}</div>
@@ -9790,37 +9848,139 @@ window.openExpenseCaptureM=function(existingId){
 const ex=existingId?EXP.find(x=>x.id===existingId):null;
 _pendingExpensePhoto=null;
 const existingPhoto=ex?(ex.photoUrl||expGetPendingPhoto(ex.id)||''):'';
+const type=ex&&ex.expenseType==='km'?'km':'achat';
+const jurKey=(ex&&ex.jurisdiction)||'CH';
+const jur=expJur(jurKey);
+const vatRate=(ex&&ex.vatRate)||jur.vatRates[0].key;
+const showThresholdWarn=type==='achat'&&(ex?ex.currency:expDefaultCurrency(jurKey))===jur.thresholdCur&&(ex&&ex.amount||0)>=jur.threshold;
 opM(`<div class="p-6">
 <h2 class="font-disp font-bold text-lg mb-1"><i class="fa-solid fa-receipt text-acc mr-1"></i>${ex?'Modifier la note de frais':'Nouvelle note de frais'}</h2>
-<p class="text-xs text-mut mb-4">Photographie ou importe une facture — le texte est analysé automatiquement (OCR local, gratuit) pour préremplir les champs. Vérifie et corrige avant d'enregistrer.</p>
+<p class="text-xs text-mut mb-4">Photographie ou importe une facture — le texte est analysé automatiquement (OCR local, gratuit) pour préremplir les champs. Les champs marqués sont ceux exigés pour ne pas voir la note retoquée par le fisc.</p>
+
+<form onsubmit="svExpense(event)" class="flex flex-col gap-3">
+<input type="hidden" name="id" value="${ex?ex.id:''}">
+<div class="flex gap-2 mb-4">
+<label class="flex-1 flex items-center justify-center gap-2 h-10 rounded-xl border cursor-pointer text-xs font-medium transition-colors ${type==='achat'?'bg-acc text-black border-acc':'bg-sAlt border-bdr text-mut'}"><input type="radio" name="expenseType" value="achat" class="hidden" ${type==='achat'?'checked':''} onchange="expToggleType('achat')"><i class="fa-solid fa-receipt"></i>Achat (facture/ticket)</label>
+<label class="flex-1 flex items-center justify-center gap-2 h-10 rounded-xl border cursor-pointer text-xs font-medium transition-colors ${type==='km'?'bg-acc text-black border-acc':'bg-sAlt border-bdr text-mut'}"><input type="radio" name="expenseType" value="km" class="hidden" ${type==='km'?'checked':''} onchange="expToggleType('km')"><i class="fa-solid fa-road"></i>Indemnité kilométrique</label>
+</div>
+
+<div id="expAchatZone" class="${type==='km'?'hidden':''}">
 <div class="mb-4">
 <div class="fd-zone p-4 text-center cursor-pointer" onclick="document.getElementById('expPhotoInput').click()">
 <img id="expPhotoPreview" src="${existingPhoto}" class="max-h-48 mx-auto rounded-lg mb-2 object-contain ${existingPhoto?'':'hidden'}">
 <i id="expPhotoIcon" class="fa-solid fa-camera text-2xl text-mut mb-2 block ${existingPhoto?'hidden':''}"></i>
-<div class="text-xs text-mut">Cliquez pour prendre une photo ou choisir un fichier</div>
+<div class="text-xs text-mut">Cliquez pour prendre une photo ou choisir un fichier <span class="text-acc">— justificatif requis pour être recevable</span></div>
 <input type="file" id="expPhotoInput" accept="image/*" capture="environment" class="hidden" onchange="handleExpensePhoto(this)">
 </div>
 <div id="expOcrStatus" class="text-[.65rem] text-mut mt-2"></div>
 </div>
-<form onsubmit="svExpense(event)" class="flex flex-col gap-3">
-<input type="hidden" name="id" value="${ex?ex.id:''}">
+</div>
+
+<div id="expKmZone" class="${type==='achat'?'hidden':''} grid grid-cols-2 gap-3 mb-4">
+<div><label class="text-[.65rem] text-mut block mb-1">Distance (km)</label><input type="number" step="0.1" id="expKm" value="${ex&&ex.km?ex.km:''}" oninput="expComputeKmAmount()" class="fi text-sm" placeholder="0"></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Tarif (par km) — vérifie le barème en vigueur</label><input type="number" step="0.01" id="expKmRate" value="${ex&&ex.kmRate?ex.kmRate:'0.70'}" oninput="expComputeKmAmount()" class="fi text-sm"></div>
+</div>
+<div class="grid grid-cols-2 gap-3">
+<div><label class="text-[.65rem] text-mut block mb-1">Juridiction fiscale</label><select id="expJurisdiction" name="jurisdiction" class="fi text-sm" onchange="expOnJurisdictionChange()">${EXP_JURISDICTIONS.map(j=>`<option value="${j.key}" ${jurKey===j.key?'selected':''}>${j.label}</option>`).join('')}</select></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Dossier lié (optionnel)</label><select name="folder" class="fi text-sm"><option value="">Aucun</option>${FOLDERS.map(f=>`<option value="${f.key}" ${ex&&ex.folder===f.key?'selected':''}>${escHtml(f.name)}</option>`).join('')}</select></div>
+</div>
 <div class="grid grid-cols-2 gap-3">
 <div><label class="text-[.65rem] text-mut block mb-1">Date</label><input type="date" id="expDate" name="date" value="${ex?ex.date:todayStr()}" class="fi text-sm"></div>
 <div class="grid grid-cols-3 gap-2">
-<div class="col-span-2"><label class="text-[.65rem] text-mut block mb-1">Montant</label><input type="number" step="0.01" id="expAmount" name="amount" value="${ex&&ex.amount?ex.amount:''}" class="fi text-sm" placeholder="0.00"></div>
-<div><label class="text-[.65rem] text-mut block mb-1">Devise</label><select name="currency" class="fi text-sm"><option ${(!ex||ex.currency==='CHF')?'selected':''}>CHF</option><option ${ex&&ex.currency==='EUR'?'selected':''}>EUR</option><option ${ex&&ex.currency==='USD'?'selected':''}>USD</option></select></div>
+<div class="col-span-2"><label class="text-[.65rem] text-mut block mb-1">Montant</label><input type="number" step="0.01" id="expAmount" name="amount" value="${ex&&ex.amount?ex.amount:''}" oninput="expOnAmountInput()" class="fi text-sm" placeholder="0.00"></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Devise</label><select name="currency" onchange="expMarkCurrencyChanged();expCheckThreshold()" class="fi text-sm"><option ${(ex?ex.currency:expDefaultCurrency(jurKey))==='CHF'?'selected':''}>CHF</option><option ${(ex&&ex.currency)==='EUR'?'selected':''}>EUR</option><option ${(ex&&ex.currency)==='USD'?'selected':''}>USD</option></select></div>
 </div>
 </div>
 <div><label class="text-[.65rem] text-mut block mb-1">Fournisseur</label><input type="text" id="expVendor" name="vendor" value="${ex?escHtml(ex.vendor):''}" class="fi text-sm" placeholder="Ex : Migros, SNCF, Hôtel..." required></div>
 <div class="grid grid-cols-2 gap-3">
-<div><label class="text-[.65rem] text-mut block mb-1">Catégorie</label><select id="expCategory" name="category" class="fi text-sm">${EXP_CATEGORIES.map(c=>`<option value="${c.key}" ${ex&&ex.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
-<div><label class="text-[.65rem] text-mut block mb-1">Dossier lié (optionnel)</label><select name="folder" class="fi text-sm"><option value="">Aucun</option>${FOLDERS.map(f=>`<option value="${f.key}" ${ex&&ex.folder===f.key?'selected':''}>${escHtml(f.name)}</option>`).join('')}</select></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Catégorie</label><select id="expCategory" name="category" class="fi text-sm" onchange="expToggleAttendeesField()">${EXP_CATEGORIES.map(c=>`<option value="${c.key}" ${ex&&ex.category===c.key?'selected':''}>${c.label}</option>`).join('')}</select></div>
+<div><label class="text-[.65rem] text-mut block mb-1">N° facture / référence</label><input type="text" name="refNumber" value="${ex?escHtml(ex.refNumber||''):''}" class="fi text-sm" placeholder="Optionnel"></div>
 </div>
+<div id="expAttendeesWrap" class="${ex&&ex.category==='repas'?'':'hidden'}"><label class="text-[.65rem] text-mut block mb-1">Personnes présentes (repas d'affaires)</label><input type="text" name="attendees" value="${ex?escHtml(ex.attendees||''):''}" class="fi text-sm" placeholder="Ex : Jean Dupont (client X)"></div>
+
+<div id="expVatZone" class="${type==='km'?'hidden':''} bg-sAlt border border-bdr rounded-xl p-3">
+<div class="text-[.6rem] text-mut uppercase tracking-wide mb-2">TVA (pour récupération fiscale)</div>
+<div class="grid grid-cols-2 gap-2 mb-2">
+<div><label class="text-[.65rem] text-mut block mb-1">Taux</label><select id="expVatRate" name="vatRate" class="fi text-sm" onchange="expOnVatRateChange()">${jur.vatRates.map(v=>`<option value="${v.key}" ${vatRate===v.key?'selected':''}>${v.label}</option>`).join('')}</select></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Montant TVA</label><input type="number" step="0.01" id="expVatAmount" name="vatAmount" value="${ex&&ex.vatAmount?ex.vatAmount:''}" oninput="expOnVatAmountInput()" class="fi text-sm" placeholder="Auto"></div>
+</div>
+<div id="expHtDisplay" class="text-[.65rem] text-mut">Montant HT : ${ex&&ex.amount?(ex.amount-(ex.vatAmount||0)).toFixed(2):'0.00'}</div>
+<label id="expThresholdWarn" class="flex items-start gap-2 mt-3 p-2 rounded-lg bg-accS text-acc text-[.65rem] cursor-pointer ${showThresholdWarn?'':'hidden'}"><input type="checkbox" name="fullInvoice" ${ex&&ex.fullInvoice?'checked':''} class="mt-0.5"><span id="expThresholdLabel">Facture complète (nom du destinataire mentionné) — recommandé dès ${jur.threshold} ${jur.thresholdCur} (${jur.authority})</span></label>
+</div>
+
 <div><label class="text-[.65rem] text-mut block mb-1">Statut</label><select name="status" class="fi text-sm">${EXP_STATUSES.map(s=>`<option value="${s.key}" ${ex&&ex.status===s.key?'selected':''}>${s.label}</option>`).join('')}</select></div>
-<div><label class="text-[.65rem] text-mut block mb-1">Note</label><textarea name="note" rows="2" class="fi text-sm">${ex?escHtml(ex.note):''}</textarea></div>
+<div><label class="text-[.65rem] text-mut block mb-1">Motif professionnel <span class="text-acc">(obligatoire)</span></label><textarea name="note" rows="2" class="fi text-sm" placeholder="Pourquoi cette dépense est-elle professionnelle ?" required>${ex?escHtml(ex.note):''}</textarea></div>
 <div class="flex justify-end gap-3 mt-2"><button type="button" onclick="clsM()" class="h-10 px-5 rounded-xl bg-sAlt border border-bdr text-sm font-medium hover:bg-sHov transition-colors bp">Annuler</button><button type="submit" class="h-10 px-5 rounded-xl bg-acc hover:bg-accH text-black text-sm font-semibold transition-colors bp">Enregistrer</button></div>
 </form>
 </div>`);
+};
+
+/* ===== Toggles / calculs dynamiques du formulaire ===== */
+window.expOnJurisdictionChange=function(){
+const jurKey=document.getElementById('expJurisdiction').value;
+const jur=expJur(jurKey);
+const vatSel=document.getElementById('expVatRate');
+if(vatSel){
+const cur=vatSel.value;
+vatSel.innerHTML=jur.vatRates.map(v=>`<option value="${v.key}">${v.label}</option>`).join('');
+vatSel.value=jur.vatRates.some(v=>v.key===cur)?cur:jur.vatRates[0].key;
+}
+const curSel=document.querySelector('[name="currency"]');
+if(curSel&&!curSel.dataset.userChanged)curSel.value=expDefaultCurrency(jurKey);
+window.expOnVatRateChange();
+window.expCheckThreshold();
+};
+window.expMarkCurrencyChanged=function(){const el=document.querySelector('[name="currency"]');if(el)el.dataset.userChanged='1';};
+window.expToggleType=function(type){
+const achatZone=document.getElementById('expAchatZone'),kmZone=document.getElementById('expKmZone'),vatZone=document.getElementById('expVatZone');
+if(achatZone)achatZone.classList.toggle('hidden',type!=='achat');
+if(kmZone)kmZone.classList.toggle('hidden',type!=='km');
+if(vatZone)vatZone.classList.toggle('hidden',type!=='achat');
+if(type==='km')window.expComputeKmAmount();
+window.expCheckThreshold();
+};
+window.expComputeKmAmount=function(){
+const km=parseFloat(document.getElementById('expKm').value)||0;
+const rate=parseFloat(document.getElementById('expKmRate').value)||0;
+const amtEl=document.getElementById('expAmount');
+if(amtEl)amtEl.value=(km*rate).toFixed(2);
+};
+window.expOnAmountInput=function(){window.expOnVatRateChange(true);window.expCheckThreshold();};
+window.expOnVatRateChange=function(keepManual){
+const vatEl=document.getElementById('expVatAmount');
+if(!vatEl)return;
+if(!keepManual)vatEl.dataset.manual='0';
+if(vatEl.dataset.manual!=='1'){
+const amt=parseFloat(document.getElementById('expAmount').value)||0;
+const rate=document.getElementById('expVatRate').value;
+vatEl.value=expVatAmount(amt,rate)||'';
+}
+window.expRecalcHt();
+};
+window.expOnVatAmountInput=function(){const vatEl=document.getElementById('expVatAmount');if(vatEl)vatEl.dataset.manual='1';window.expRecalcHt();};
+window.expRecalcHt=function(){
+const amt=parseFloat(document.getElementById('expAmount').value)||0;
+const vat=parseFloat(document.getElementById('expVatAmount').value)||0;
+const htEl=document.getElementById('expHtDisplay');
+if(htEl)htEl.textContent='Montant HT : '+(amt-vat).toFixed(2);
+};
+window.expCheckThreshold=function(){
+const typeEl=document.querySelector('input[name="expenseType"]:checked');
+const type=typeEl?typeEl.value:'achat';
+const jurEl=document.getElementById('expJurisdiction');if(!jurEl)return;
+const jur=expJur(jurEl.value);
+const amt=parseFloat(document.getElementById('expAmount').value)||0;
+const curEl=document.querySelector('[name="currency"]');
+const cur=curEl?curEl.value:'CHF';
+const warn=document.getElementById('expThresholdWarn');
+if(warn)warn.classList.toggle('hidden',!(type==='achat'&&cur===jur.thresholdCur&&amt>=jur.threshold));
+const label=document.getElementById('expThresholdLabel');
+if(label)label.textContent='Facture complète (nom du destinataire mentionné) — recommandé dès '+jur.threshold+' '+jur.thresholdCur+' ('+jur.authority+')';
+};
+window.expToggleAttendeesField=function(){
+const cat=document.getElementById('expCategory').value;
+const wrap=document.getElementById('expAttendeesWrap');
+if(wrap)wrap.classList.toggle('hidden',cat!=='repas');
 };
 
 window.handleExpensePhoto=function(input){
@@ -9854,17 +10014,35 @@ window.svExpense=async function(e){
 e.preventDefault();
 const f=new FormData(e.target);
 const id=f.get('id')?parseInt(f.get('id'),10):null;
+const typeEl=e.target.querySelector('input[name="expenseType"]:checked');
 const data={
+expenseType:typeEl?typeEl.value:'achat',
+jurisdiction:f.get('jurisdiction')||'CH',
 date:f.get('date')||todayStr(),
 amount:parseFloat(String(f.get('amount')||'0').replace(',','.'))||0,
 currency:f.get('currency')||'CHF',
 vendor:(f.get('vendor')||'').trim(),
 category:f.get('category')||'autre',
 folder:f.get('folder')||null,
+refNumber:(f.get('refNumber')||'').trim(),
+attendees:(f.get('attendees')||'').trim(),
+vatRate:f.get('vatRate')||'',
+vatAmount:parseFloat(String(f.get('vatAmount')||'0').replace(',','.'))||0,
+fullInvoice:f.get('fullInvoice')==='on',
+km:parseFloat(f.get('km')||'')||0,
+kmRate:parseFloat(f.get('kmRate')||'')||0,
 note:(f.get('note')||'').trim(),
 status:f.get('status')||'a_traiter'
 };
-if(!data.vendor){toast('Indique au moins un fournisseur','err');return;}
+if(data.expenseType==='km'){
+const kmEl=document.getElementById('expKm'),kmRateEl=document.getElementById('expKmRate');
+data.km=parseFloat(kmEl&&kmEl.value)||0;
+data.kmRate=parseFloat(kmRateEl&&kmRateEl.value)||0;
+data.vatRate='';data.vatAmount=0;data.fullInvoice=false;
+if(!data.km){toast('Indique la distance parcourue','err');return;}
+}
+if(!data.vendor){toast(data.expenseType==='km'?'Indique au moins le trajet / la destination':'Indique au moins un fournisseur','err');return;}
+if(!data.note){toast('Le motif professionnel est obligatoire (exigé en cas de contrôle fiscal)','err');return;}
 let exp,isNew=false;
 if(id){exp=EXP.find(x=>x.id===id);if(exp)Object.assign(exp,data);}
 if(!exp){isNew=true;exp=Object.assign({id:gid(EXP),ocrText:'',photoPath:'',photoUrl:'',photoSyncStatus:'none',createdAt:Date.now()},data);EXP.push(exp);}
@@ -9898,17 +10076,27 @@ toast('Cloud non connecté : la photo reste sur cet appareil pour l\'instant','i
 window.openExpenseDetailM=function(id){
 const x=EXP.find(e=>e.id===id);if(!x)return;
 const c=expCat(x.category);
+const jur=expJur(x.jurisdiction||'CH');
+const isKm=x.expenseType==='km';
 const photoSrc=x.photoUrl||expGetPendingPhoto(x.id)||'';
+const issues=expComplianceIssues(x);
 opM(`<div class="p-6">
 <div class="flex items-start justify-between mb-4"><h2 class="font-disp font-bold text-lg">${escHtml(x.vendor)||'Note de frais'}</h2><button onclick="clsM()" class="w-8 h-8 rounded-lg hover:bg-sHov flex items-center justify-center text-mut"><i class="fa-solid fa-xmark"></i></button></div>
-${photoSrc?`<img src="${photoSrc}" class="w-full max-h-80 object-contain rounded-lg border border-bdr mb-4 bg-black/40" alt="Facture">`:'<div class="w-full h-24 rounded-lg border border-bdr mb-4 flex items-center justify-center text-mut text-xs">Pas de photo</div>'}
+${issues.length?`<div class="bg-accS text-acc text-xs rounded-lg p-3 mb-4"><i class="fa-solid fa-triangle-exclamation mr-1"></i><b>À corriger avant contrôle fiscal (${jur.authority}) :</b><ul class="list-disc list-inside mt-1">${issues.map(i=>`<li>${escHtml(i)}</li>`).join('')}</ul></div>`:`<div class="bg-okS text-ok text-xs rounded-lg p-3 mb-4"><i class="fa-solid fa-circle-check mr-1"></i>Conforme aux exigences ${jur.authority}</div>`}
+${isKm?'':(photoSrc?`<img src="${photoSrc}" class="w-full max-h-80 object-contain rounded-lg border border-bdr mb-4 bg-black/40" alt="Facture">`:'<div class="w-full h-24 rounded-lg border border-bdr mb-4 flex items-center justify-center text-mut text-xs">Pas de photo</div>')}
 <div class="grid grid-cols-2 gap-3 text-sm mb-4">
 <div><div class="text-[.65rem] text-mut uppercase">Montant</div><div class="font-disp font-bold">${expFmtAmount(x.amount,x.currency)}</div></div>
 <div><div class="text-[.65rem] text-mut uppercase">Date</div><div>${fmtFr(x.date)}</div></div>
 <div><div class="text-[.65rem] text-mut uppercase">Catégorie</div><div><i class="fa-solid ${c.icon} mr-1"></i>${c.label}</div></div>
 <div><div class="text-[.65rem] text-mut uppercase">Dossier</div><div>${x.folder&&fldr(x.folder)?escHtml(fldr(x.folder).name):'—'}</div></div>
+<div><div class="text-[.65rem] text-mut uppercase">Juridiction</div><div>${jur.label}</div></div>
+<div><div class="text-[.65rem] text-mut uppercase">Réf. facture</div><div>${x.refNumber?escHtml(x.refNumber):'—'}</div></div>
+${isKm?`<div><div class="text-[.65rem] text-mut uppercase">Distance</div><div>${x.km} km × ${x.kmRate} ${x.currency}/km</div></div>`:`<div><div class="text-[.65rem] text-mut uppercase">TVA</div><div>${x.vatRate&&x.vatRate!=='na'?expVat(x.jurisdiction||'CH',x.vatRate).label+' — '+expFmtAmount(x.vatAmount,x.currency):(x.vatRate==='na'?'Non mentionnée':'—')}</div></div>
+<div><div class="text-[.65rem] text-mut uppercase">Montant HT</div><div>${expFmtAmount((x.amount||0)-(x.vatAmount||0),x.currency)}</div></div>
+<div><div class="text-[.65rem] text-mut uppercase">Facture complète</div><div>${x.fullInvoice?'Oui':'Non'}</div></div>`}
 </div>
-${x.note?`<div class="text-xs text-mut mb-4"><span class="uppercase text-[.6rem]">Note</span><br>${escHtml(x.note)}</div>`:''}
+${x.attendees?`<div class="text-xs text-mut mb-3"><span class="uppercase text-[.6rem]">Personnes présentes</span><br>${escHtml(x.attendees)}</div>`:''}
+${x.note?`<div class="text-xs text-mut mb-4"><span class="uppercase text-[.6rem]">Motif professionnel</span><br>${escHtml(x.note)}</div>`:''}
 ${x.ocrText?`<details class="mb-4"><summary class="text-[.65rem] text-mut cursor-pointer uppercase">Texte OCR brut</summary><pre class="text-[.65rem] text-mut whitespace-pre-wrap mt-2 bg-sAlt p-2 rounded-lg max-h-32 overflow-y-auto">${escHtml(x.ocrText)}</pre></details>`:''}
 <div class="flex flex-wrap gap-2 mb-2">
 ${EXP_STATUSES.map(s=>`<button onclick="expSetStatus(${x.id},'${s.key}')" class="chip ${x.status===s.key?'act':''}">${s.label}</button>`).join('')}
@@ -9934,9 +10122,29 @@ toast('Note de frais supprimée','info');
 window.expExportCsv=function(){
 const list=filteredExpenses();
 if(!list.length){toast('Rien à exporter avec ce filtre','info');return;}
-const rows=[['Date','Fournisseur','Montant','Devise','Catégorie','Statut','Dossier','Note']];
+const rows=[['Date','Type','Fournisseur','Montant','Devise','Catégorie','Statut','Dossier','Juridiction','N° référence','Taux TVA','Montant TVA','Montant HT','Distance (km)','Personnes présentes','Motif professionnel','Conforme']];
 list.forEach(x=>{
-rows.push([x.date,x.vendor,x.amount,x.currency,expCat(x.category).label,expStatus(x.status).label,x.folder&&fldr(x.folder)?fldr(x.folder).name:'',x.note||'']);
+const jur=expJur(x.jurisdiction||'CH');
+const isKm=x.expenseType==='km';
+rows.push([
+x.date,
+isKm?'Kilométrique':'Achat',
+x.vendor,
+x.amount,
+x.currency,
+expCat(x.category).label,
+expStatus(x.status).label,
+x.folder&&fldr(x.folder)?fldr(x.folder).name:'',
+jur.label,
+x.refNumber||'',
+(!isKm&&x.vatRate)?expVat(x.jurisdiction||'CH',x.vatRate).label:'',
+(!isKm&&x.vatAmount)?x.vatAmount:'',
+isKm?'':(((x.amount||0)-(x.vatAmount||0)).toFixed(2)),
+isKm?(x.km||''):'',
+x.attendees||'',
+x.note||'',
+expIsCompliant(x)?'Oui':'Non'
+]);
 });
 const csv=rows.map(r=>r.map(v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"').join(';')).join('\n');
 const blob=new Blob(['﻿'+csv],{type:'text/csv;charset=utf-8'});
