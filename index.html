@@ -645,6 +645,21 @@ function fbCancelQueuedPush(){
 if(_fbPushTimer){clearTimeout(_fbPushTimer);_fbPushTimer=null;}
 _fbPushQueued=false;
 }
+/* BUG CORRIGÉ (sync mobile→desktop) : le push cloud était différé de 1.5s (fbQueuePush) sans
+   aucun rattrapage si l'onglet se fermait ou passait en arrière-plan avant l'expiration du
+   délai — cas très fréquent sur mobile (l'utilisateur enregistre une note puis quitte
+   immédiatement l'app), rare sur desktop (l'onglet reste ouvert). Le .set() Firestore n'étant
+   jamais émis, la donnée restait uniquement en localStorage sur le téléphone et n'apparaissait
+   jamais sur les autres appareils. On force ici un envoi immédiat (sans passer par le contrôle
+   de conflit, incompatible avec une page en cours de fermeture) dès que l'app est mise en
+   arrière-plan ou que la page se ferme. */
+function fbFlushPendingPush(){
+if(!_fbPushQueued)return;
+fbCancelQueuedPush();
+if(typeof fbIsReady==='function'&&fbIsReady()&&typeof fbDoPush==='function')fbDoPush();
+}
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')fbFlushPendingPush();});
+window.addEventListener('pagehide',fbFlushPendingPush);
 
 function fbDoPush(){
 FB.pushing=true;
