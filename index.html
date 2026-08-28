@@ -497,6 +497,7 @@ function fbInit(cfg){
 try{
 if(FB.app){try{FB.app.delete();}catch(e){}}
 var _storageBucket=cfg.storageBucket||(cfg.projectId?cfg.projectId+'.firebasestorage.app':'');
+FB.storageBucket=_storageBucket;
 FB.app=firebase.initializeApp({apiKey:cfg.apiKey,authDomain:cfg.authDomain,projectId:cfg.projectId,storageBucket:_storageBucket,messagingSenderId:cfg.messagingSenderId||'',appId:cfg.appId||''});
 FB.auth=firebase.auth();
 FB.db=firebase.firestore();
@@ -765,6 +766,15 @@ var lignes=[];
 lignes.push('UID : '+(FB.uid?FB.uid:'—'));
 lignes.push('Email : '+(FB.userEmail||'—'));
 lignes.push('Dernier horodatage connu sur cet appareil : '+(localTs?new Date(localTs).toLocaleString('fr-FR'):'aucun'));
+/* Diagnostic Storage (photos de notes de frais) : séparé de Firestore, échoue souvent
+   silencieusement (bucket non activé, règles de sécurité manquantes) sans qu'aucune erreur
+   ne remonte ailleurs dans l'app — d'où ce statut visible sans console, y compris sur mobile. */
+lignes.push('Storage (photos) : '+(FB.storage?'initialisé':'non initialisé — SDK Storage manquant ou bucket vide'));
+lignes.push('Bucket configuré : '+(FB.storageBucket||'—'));
+if(typeof EXP!=='undefined'){
+var pendingPhotos=EXP.filter(function(x){return x.photoSyncStatus==='pending';});
+lignes.push('Photos de notes de frais en attente d\'envoi sur cet appareil : '+pendingPhotos.length);
+}
 return lignes.join('<br>');
 }
 
@@ -796,7 +806,29 @@ lignes.push('');
 lignes.push('Horodatage local connu : '+(localTs?new Date(localTs).toLocaleString('fr-FR'):'aucun')+' (brut '+localTs+')');
 lignes.push('');
 lignes.push(remote&&rts===localTs?'SYNCHRONISÉ avec le cloud':'DÉCALAGE : cet appareil n\'a pas la dernière version du cloud (ou inversement)');
+lignes.push('');
+lignes.push('--- STORAGE (photos notes de frais) ---');
+lignes.push('Bucket configuré : '+(FB.storageBucket||'—'));
+if(!FB.storage){
+lignes.push('FB.storage non initialisé — le module Storage n\'a pas pu démarrer (vérifie que le script firebase-storage-compat est bien chargé).');
 alert(lignes.join('\n'));
+return;
+}
+/* Test d'écriture réel (pas juste "est-ce initialisé ?") : c'est la seule façon de
+   distinguer un bucket mal configuré d'une règle de sécurité Storage qui bloque les
+   écritures — les deux donnent un FB.storage "initialisé" mais échouent différemment. */
+var testRef=FB.storage.ref().child('expenses/'+FB.uid+'/_diag_test.txt');
+return testRef.putString('diagnostic').then(function(){
+return testRef.delete().catch(function(){});
+}).then(function(){
+lignes.push('Test d\'écriture Storage : OK — les photos peuvent être envoyées depuis cet appareil.');
+alert(lignes.join('\n'));
+}).catch(function(e){
+lignes.push('Test d\'écriture Storage : ÉCHEC — '+(e.code||'')+' : '+(e.message||e));
+if(e.code==='storage/unauthorized')lignes.push('→ Les règles de sécurité Storage (Firebase Console → Storage → Rules) refusent l\'écriture. Elles doivent autoriser au moins request.auth != null.');
+else if(e.code==='storage/unknown'||e.code==='storage/bucket-not-found'||e.code==='storage/project-not-found')lignes.push('→ Le bucket "'+(FB.storageBucket||'?')+'" semble introuvable ou Storage n\'est pas activé sur ce projet Firebase (Firebase Console → Storage → Commencer).');
+alert(lignes.join('\n'));
+});
 });
 }).catch(function(e){
 alert('ERREUR lors de la vérification cloud :\n\n'+(e.code||'')+'\n'+(e.message||e));
@@ -829,6 +861,13 @@ var wasExplicit=FB.signingIn;FB.signingIn=false;
 FB.uid=user.uid;FB.userEmail=user.email||user.displayName||user.uid;
 localStorage.setItem('cdc_fb_uid',FB.uid);
 fbStartSync();
+/* Rattraper les photos de notes de frais restées en attente sur CET appareil : avant ça,
+   l'envoi n'était retenté que via un clic manuel ou quand une donnée plus récente arrivait
+   d'un AUTRE appareil (window._onExpensesSynced) — jamais simplement en se reconnectant après
+   un échec réseau initial sur l'appareil qui a pris la photo. */
+if(typeof window.retryPendingExpensePhotos==='function'){
+setTimeout(function(){if(typeof fbStorageReady==='function'&&fbStorageReady())window.retryPendingExpensePhotos(true);},2000);
+}
 if(wasExplicit){
 toast('Connecté en tant que '+FB.userEmail,'info');
 openSettingsM();
@@ -9956,26 +9995,30 @@ async function deleteExpensePhoto(path){
 if(!fbStorageReady()||!path)return;
 try{await FB.storage.ref().child(path).delete();}catch(e){/* ignore */}
 }
-window.retryPendingExpensePhotos=async function(){
-if(!fbStorageReady()){toast('Connecte le cloud (Google) pour envoyer les photos en attente','err');return;}
+window.retryPendingExpensePhotos=async function(silent){
+if(!fbStorageReady()){if(!silent)toast('Connecte le cloud (Google) pour envoyer les photos en attente','err');return;}
 const pending=EXP.filter(x=>x.photoSyncStatus==='pending');
-if(!pending.length){toast('Aucune photo en attente','info');return;}
-toast('Envoi de '+pending.length+' photo(s) en cours...','info');
-let ok=0;
+if(!pending.length){if(!silent)toast('Aucune photo en attente','info');return;}
+if(!silent)toast('Envoi de '+pending.length+' photo(s) en cours...','info');
+let ok=0,lastErr=null;
 for(const exp of pending){
 const dataUrl=expGetPendingPhoto(exp.id);
 if(!dataUrl)continue;
 try{
 const up=await uploadExpensePhoto(exp.id,dataUrl);
 if(up){exp.photoPath=up.path;exp.photoUrl=up.url;exp.photoSyncStatus='synced';expClearPendingPhoto(exp.id);ok++;}
-}catch(err){console.error('[Expenses] retry upload erreur',err);}
+}catch(err){console.error('[Expenses] retry upload erreur',err);lastErr=err;}
 }
 svExpenses();
 if(S.v==='expenses')rExpenses();
-toast(ok+' photo(s) synchronisée(s)'+(ok<pending.length?' · '+(pending.length-ok)+' échec(s), réessaie plus tard':''),ok===pending.length?'ok':'info');
+/* L'erreur exacte (code Firebase Storage) est affichée plutôt que juste "échec" — sans ça,
+   impossible de diagnostiquer depuis un mobile sans console développeur (bucket non activé,
+   règles de sécurité Storage manquantes, etc. donnent des codes différents et distinctifs). */
+if(ok===pending.length){toast(ok+' photo(s) synchronisée(s)','ok');}
+else{toast(ok+' photo(s) synchronisée(s) · '+(pending.length-ok)+' échec(s) : '+(lastErr?(lastErr.code||lastErr.message||lastErr):'raison inconnue'),'err');}
 };
 /* Relance automatique quand une sync cloud arrive (connexion, reconnexion...) */
-window._onExpensesSynced=function(){if(fbStorageReady())retryPendingExpensePhotos();if(S.v==='expenses')rExpenses();};
+window._onExpensesSynced=function(){if(fbStorageReady())retryPendingExpensePhotos(true);if(S.v==='expenses')rExpenses();};
 
 /* ===== MODAL CAPTURE / ÉDITION ===== */
 let _pendingExpensePhoto=null;
@@ -10231,7 +10274,7 @@ if(fbStorageReady()){
 try{
 const up=await uploadExpensePhoto(exp.id,pending.dataUrl);
 if(up){exp.photoPath=up.path;exp.photoUrl=up.url;exp.photoSyncStatus='synced';expClearPendingPhoto(exp.id);svExpenses();if(S.v==='expenses')rExpenses();toast('Photo synchronisée sur le cloud','ok');}
-}catch(err){console.error('[Expenses] upload erreur',err);toast('Photo gardée sur cet appareil — l\'envoi cloud a échoué, nouvelle tentative plus tard','err');}
+}catch(err){console.error('[Expenses] upload erreur',err);toast('Photo gardée sur cet appareil — l\'envoi cloud a échoué ('+(err.code||err.message||err)+'), nouvelle tentative plus tard','err');}
 }else{
 toast('Cloud non connecté : la photo reste sur cet appareil pour l\'instant','info');
 }
