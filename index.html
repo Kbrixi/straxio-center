@@ -9745,13 +9745,63 @@ document.head.appendChild(s);
 });
 return _tesseractLoading;
 }
+/* Prétraitement image avant OCR : niveaux de gris + seuillage automatique (Otsu) + upscale
+   des petites images. Améliore nettement la lecture Tesseract sur des tickets flous, sombres
+   ou pris en contre-jour, sans dépendance externe. Ne remplace PAS la photo affichée/stockée
+   (couleur, compressée) — seulement la version envoyée à l'OCR. */
+function preprocessImageForOcr(dataUrl){
+return new Promise(resolve=>{
+const img=new Image();
+img.onload=()=>{
+try{
+const w=img.naturalWidth,h=img.naturalHeight;
+const longSide=Math.max(w,h);
+const scale=longSide<1200?Math.min(2,1200/longSide):1;
+const nw=Math.max(1,Math.round(w*scale)),nh=Math.max(1,Math.round(h*scale));
+const canvas=document.createElement('canvas');
+canvas.width=nw;canvas.height=nh;
+const ctx=canvas.getContext('2d');
+ctx.drawImage(img,0,0,nw,nh);
+const imgData=ctx.getImageData(0,0,nw,nh);
+const d=imgData.data;
+const hist=new Array(256).fill(0);
+const gray=new Uint8ClampedArray(nw*nh);
+for(let i=0,p=0;i<d.length;i+=4,p++){
+const g=Math.round(0.299*d[i]+0.587*d[i+1]+0.114*d[i+2]);
+gray[p]=g;hist[g]++;
+}
+const total=nw*nh;
+let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];
+let sumB=0,wB=0,wF=0,maxVar=0,threshold=127;
+for(let t=0;t<256;t++){
+wB+=hist[t];if(wB===0)continue;
+wF=total-wB;if(wF===0)break;
+sumB+=t*hist[t];
+const mB=sumB/wB,mF=(sum-sumB)/wF;
+const varBetween=wB*wF*(mB-mF)*(mB-mF);
+if(varBetween>maxVar){maxVar=varBetween;threshold=t;}
+}
+for(let i=0,p=0;i<d.length;i+=4,p++){
+const v=gray[p]>threshold?255:0;
+d[i]=d[i+1]=d[i+2]=v;
+}
+ctx.putImageData(imgData,0,0);
+resolve(canvas.toDataURL('image/png'));
+}catch(e){resolve(dataUrl);}
+};
+img.onerror=()=>resolve(dataUrl);
+img.src=dataUrl;
+});
+}
 async function ocrExtractText(dataUrl){
 await loadTesseract();
 const res=await window.Tesseract.recognize(dataUrl,'fra+eng');
-return(res&&res.data&&res.data.text)||'';
+const text=(res&&res.data&&res.data.text)||'';
+const confidence=(res&&res.data&&typeof res.data.confidence==='number')?res.data.confidence:null;
+return{text,confidence};
 }
 function parseExpenseFromOcr(text){
-const res={amount:null,date:'',vendor:''};
+const res={amount:null,date:'',vendor:'',currency:null};
 const lines=(text||'').split(/\n/).map(l=>l.trim()).filter(Boolean);
 const amountRegex=/(\d{1,3}(?:[.\s'’]\d{3})*(?:[.,]\d{2}))\s*(chf|eur|€|fr\.?|usd|\$)?/i;
 const candidates=[];
@@ -9762,11 +9812,23 @@ const raw=m[1].replace(/[\s'’]/g,'').replace(',','.');
 const val=parseFloat(raw);
 if(!isNaN(val)&&val>0&&val<100000){
 const boost=/total|montant|net.*payer|à payer|amount due|solde/i.test(line)?1000:0;
-candidates.push({val,boost});
+let cur=null;
+if(m[2]){
+const c=m[2].toLowerCase();
+if(c==='chf'||c==='fr'||c==='fr.')cur='CHF';
+else if(c==='eur'||c==='€')cur='EUR';
+else if(c==='usd'||c==='$')cur='USD';
+}
+candidates.push({val,boost,cur});
 }
 }
 });
-if(candidates.length){candidates.sort((a,b)=>(b.boost-a.boost)||(b.val-a.val));res.amount=candidates[0].val;}
+if(candidates.length){
+candidates.sort((a,b)=>(b.boost-a.boost)||(b.val-a.val));
+res.amount=candidates[0].val;
+const withCur=candidates.find(c=>c.cur);
+res.currency=(withCur&&withCur.cur)||null;
+}
 const dateRegex=/(\d{2})[.\/-](\d{2})[.\/-](\d{4})|(\d{4})-(\d{2})-(\d{2})/;
 for(const line of lines){
 const m=line.match(dateRegex);
@@ -9774,6 +9836,64 @@ if(m){res.date=m[1]?`${m[3]}-${m[2]}-${m[1]}`:`${m[4]}-${m[5]}-${m[6]}`;break;}
 }
 for(const line of lines.slice(0,6)){
 if(line.length>=3&&line.length<=40&&!/^\d+$/.test(line)&&!dateRegex.test(line)){res.vendor=line;break;}
+}
+return res;
+}
+/* Détection heuristique de la juridiction fiscale à partir du texte OCR : numéro de TVA/UID
+   suisse (CHE-xxx.xxx.xxx), "MWST", devise CHF d'une part ; numéro de TVA intracommunautaire
+   FRxx, SIRET/SIREN, "€"/EUR d'autre part. Reste silencieuse (null) si ambigu — le champ
+   juridiction reste modifiable manuellement dans tous les cas. */
+function detectJurisdictionFromOcr(text){
+const t=(text||'').toUpperCase();
+if(/CHE[-\s]?\d{3}\.?\d{3}\.?\d{3}/.test(t)||/\bMWST\b/.test(t)||/\bCHF\b/.test(t))return'CH';
+if(/\bFR\d{2}\s?\d{9,11}\b/.test(t)||/\bSIRET\b/.test(t)||/\bSIREN\b/.test(t)||/€|\bEUR\b/.test(t))return'FR';
+return null;
+}
+/* Recherche une ligne mentionnant la TVA (TVA/MWST/VAT) et tente d'en extraire le taux
+   (rapproché du taux valide le plus proche pour la juridiction donnée) et le montant. */
+function parseVatFromOcr(text,jurKey){
+const res={rateKey:'',amount:null};
+const jur=expJur(jurKey||'CH');
+/* Retire d'abord les numéros d'identification (UID suisse CHE-xxx.xxx.xxx, TVA intracommunautaire
+   FRxx..., SIRET/SIREN) : ces lignes contiennent souvent le mot "TVA" mais leurs chiffres ne sont
+   pas un montant — sans ce nettoyage on risque de lire l'UID comme si c'était le montant de TVA. */
+const idRegex=/CHE[-\s]?\d{3}\.?\d{3}\.?\d{3}|FR\d{2}\s?\d{9,11}|SIRET[:\s]*[\d\s]{10,17}|SIREN[:\s]*[\d\s]{8,12}|UID[:\s]*CHE[-\s\d.]*|No\.?\s*TVA[:\s]*[A-Z]{0,3}[\d.\s-]{6,}/gi;
+const lines=(text||'').split(/\n/).map(l=>l.replace(idRegex,' '));
+const vatLineRegex=/tva|mwst|\bvat\b/i;
+const pctRegex=/(\d{1,2}(?:[.,]\d{1,2})?)\s*%/;
+const amtRegex=/(\d{1,3}(?:[.\s'’]\d{3})*[.,]\d{2})/;
+/* Passe 1 : ligne nettoyée qui mentionne la TVA ET un pourcentage — signal fort. Le montant est
+   lu sur cette même ligne pour éviter de piocher un nombre sans rapport ailleurs sur le ticket. */
+for(const line of lines){
+if(res.rateKey)break;
+if(!vatLineRegex.test(line))continue;
+const pm=line.match(pctRegex);
+if(!pm)continue;
+const pct=parseFloat(pm[1].replace(',','.'));
+let best=null,bestDiff=Infinity;
+jur.vatRates.forEach(v=>{
+const rv=parseFloat(v.key);
+if(!isNaN(rv)){const diff=Math.abs(rv-pct);if(diff<bestDiff){bestDiff=diff;best=v.key;}}
+});
+if(best===null||bestDiff>0.6)continue;
+res.rateKey=best;
+const am=line.match(amtRegex);
+if(am){
+const val=parseFloat(am[1].replace(/[\s'’]/g,'').replace(',','.'));
+if(!isNaN(val)&&val>0&&val<100000)res.amount=val;
+}
+}
+/* Passe 2 (repli) : aucun pourcentage trouvé, mais une ligne "dont TVA / montant TVA" avec un
+   montant seul — on garde le montant, le taux reste à renseigner manuellement. */
+if(!res.rateKey){
+for(const line of lines){
+if(!vatLineRegex.test(line))continue;
+const am=line.match(amtRegex);
+if(am){
+const val=parseFloat(am[1].replace(/[\s'’]/g,'').replace(',','.'));
+if(!isNaN(val)&&val>0&&val<100000){res.amount=val;break;}
+}
+}
 }
 return res;
 }
@@ -9873,6 +9993,10 @@ opM(`<div class="p-6">
 <input type="file" id="expPhotoInput" accept="image/*" capture="environment" class="hidden" onchange="handleExpensePhoto(this)">
 </div>
 <div id="expOcrStatus" class="text-[.65rem] text-mut mt-2"></div>
+<div id="expOcrRawWrap" class="hidden mt-1">
+<button type="button" onclick="expToggleOcrRaw()" class="text-[.6rem] text-acc underline">Voir le texte détecté (OCR)</button>
+<pre id="expOcrRawText" class="hidden text-[.6rem] text-mut bg-bg border border-bdr rounded-lg p-2 mt-1 max-h-24 overflow-auto whitespace-pre-wrap"></pre>
+</div>
 </div>
 </div>
 
@@ -9983,29 +10107,56 @@ const wrap=document.getElementById('expAttendeesWrap');
 if(wrap)wrap.classList.toggle('hidden',cat!=='repas');
 };
 
+window.expToggleOcrRaw=function(){
+const el=document.getElementById('expOcrRawText');
+if(el)el.classList.toggle('hidden');
+};
 window.handleExpensePhoto=function(input){
 const file=input.files&&input.files[0];
 if(!file)return;
 const statusEl=document.getElementById('expOcrStatus');
 if(statusEl)statusEl.textContent='Lecture de l\'image...';
+let ocrImgForDebug=null;
 compressImageFile(file,1600,0.82).then(dataUrl=>{
 _pendingExpensePhoto={dataUrl};
 const prev=document.getElementById('expPhotoPreview'),icon=document.getElementById('expPhotoIcon');
 if(prev){prev.src=dataUrl;prev.classList.remove('hidden');}
 if(icon)icon.classList.add('hidden');
+if(statusEl)statusEl.textContent='Préparation de l\'image pour l\'OCR (contraste, netteté)...';
+return preprocessImageForOcr(dataUrl);
+}).then(ocrImg=>{
+ocrImgForDebug=ocrImg;
 if(statusEl)statusEl.textContent='Analyse OCR en cours (peut prendre quelques secondes)...';
-return ocrExtractText(dataUrl);
-}).then(text=>{
+return ocrExtractText(ocrImg);
+}).then(({text,confidence})=>{
 if(_pendingExpensePhoto)_pendingExpensePhoto.ocrText=text;
 const parsed=parseExpenseFromOcr(text);
-const amtEl=document.getElementById('expAmount'),dateEl=document.getElementById('expDate'),vendEl=document.getElementById('expVendor'),catEl=document.getElementById('expCategory');
-if(parsed.amount&&amtEl)amtEl.value=parsed.amount;
-if(parsed.date&&dateEl)dateEl.value=parsed.date;
-if(parsed.vendor&&vendEl&&!vendEl.value)vendEl.value=parsed.vendor;
+const amtEl=document.getElementById('expAmount'),dateEl=document.getElementById('expDate'),vendEl=document.getElementById('expVendor'),catEl=document.getElementById('expCategory'),curEl=document.querySelector('[name="currency"]'),jurEl=document.getElementById('expJurisdiction');
+const flash=el=>{if(el){el.classList.add('ring-2','ring-acc');setTimeout(()=>el.classList.remove('ring-2','ring-acc'),2500);}};
+if(parsed.amount&&amtEl){amtEl.value=parsed.amount;flash(amtEl);if(typeof window.expOnAmountInput==='function')window.expOnAmountInput();}
+if(parsed.date&&dateEl){dateEl.value=parsed.date;flash(dateEl);}
+if(parsed.vendor&&vendEl&&!vendEl.value){vendEl.value=parsed.vendor;flash(vendEl);}
 if(catEl)catEl.value=suggestExpenseCategory((parsed.vendor||'')+' '+text);
-if(statusEl)statusEl.textContent='OCR terminé — vérifie les champs ci-dessous avant d\'enregistrer.';
+if(parsed.currency&&curEl&&!curEl.dataset.userChanged){curEl.value=parsed.currency;flash(curEl);}
+const detectedJur=detectJurisdictionFromOcr(text);
+if(detectedJur&&jurEl&&jurEl.value!==detectedJur){jurEl.value=detectedJur;flash(jurEl);if(typeof window.expOnJurisdictionChange==='function')window.expOnJurisdictionChange();}
+const finalJur=jurEl?jurEl.value:'CH';
+const vat=parseVatFromOcr(text,finalJur);
+const vatRateEl=document.getElementById('expVatRate'),vatAmtEl=document.getElementById('expVatAmount');
+if(vat.rateKey&&vatRateEl){vatRateEl.value=vat.rateKey;flash(vatRateEl);}
+if(vat.amount&&vatAmtEl){vatAmtEl.value=vat.amount;vatAmtEl.dataset.manual='1';flash(vatAmtEl);if(typeof window.expRecalcHt==='function')window.expRecalcHt();}
+if(typeof window.expCheckThreshold==='function')window.expCheckThreshold();
+let confTxt,confCls;
+if(confidence===null){confTxt='OCR terminé — vérifie les champs ci-dessous avant d\'enregistrer.';confCls='text-mut';}
+else if(confidence>=80){confTxt='Confiance OCR élevée ('+Math.round(confidence)+'%) — vérifie quand même les champs surlignés.';confCls='text-ok';}
+else if(confidence>=50){confTxt='Confiance OCR moyenne ('+Math.round(confidence)+'%) — vérifie les champs avant d\'enregistrer.';confCls='text-warn';}
+else{confTxt='Confiance OCR faible ('+Math.round(confidence)+'%) — la photo est peut-être floue ou mal cadrée, vérifie tous les champs.';confCls='text-acc';}
+if(statusEl)statusEl.innerHTML='<span class="'+confCls+'">'+confTxt+'</span>';
+const rawWrap=document.getElementById('expOcrRawWrap'),rawText=document.getElementById('expOcrRawText');
+if(rawWrap)rawWrap.classList.remove('hidden');
+if(rawText)rawText.textContent=text&&text.trim()?text:'(aucun texte détecté)';
 }).catch(err=>{
-console.error('[Expenses] OCR erreur',err);
+console.error('[Expenses] OCR erreur',err,ocrImgForDebug?'(prétraitement ok)':'(prétraitement non atteint)');
 if(statusEl)statusEl.textContent='OCR indisponible (hors-ligne ?) — remplis les champs manuellement.';
 });
 };
