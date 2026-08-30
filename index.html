@@ -778,15 +778,27 @@ lignes.push('Photos de notes de frais en attente d\'envoi sur cet appareil : '+p
 return lignes.join('<br>');
 }
 
-/* Vérifie l'état réel du cloud (lecture forcée sur le serveur, pas le cache)
-   et affiche un rapport complet via alert() — fonctionne sur mobile sans
-   avoir besoin d'ouvrir la console développeur. À lancer sur desktop ET
-   mobile puis comparer les deux rapports. */
+/* Affiche le rapport de diagnostic dans une modale de l'app plutôt qu'un alert() natif.
+   RAISON DU CHANGEMENT : alert() déclenché depuis une chaîne de .then() asynchrones (après
+   plusieurs allers-retours réseau) est fréquemment bloqué SILENCIEUSEMENT par Safari mobile,
+   en particulier en PWA ajoutée à l'écran d'accueil — le navigateur ne considère plus l'appel
+   comme suffisamment proche du tap original pour l'autoriser. Résultat : aucun rapport, aucune
+   erreur visible, et seul le panneau Paramètres (fbDiagBox, toujours statique) reste visible —
+   ce qui peut donner l'impression trompeuse que le diagnostic n'a rien produit de nouveau. Une
+   modale (DOM classique) n'a pas cette restriction et fonctionne de façon identique partout. */
+function showDiagModal(titre,lignes){
+opM('<div class="p-6"><h2 class="font-disp font-bold text-lg mb-4"><i class="fa-solid fa-stethoscope text-acc mr-2"></i>'+escHtml(titre)+'</h2>'+
+'<pre class="text-[.7rem] leading-relaxed whitespace-pre-wrap bg-sAlt border border-bdr rounded-xl p-3 max-h-[60vh] overflow-auto">'+escHtml(lignes.join('\n'))+'</pre>'+
+'<div class="flex justify-end mt-4"><button type="button" onclick="clsM()" class="h-10 px-5 rounded-xl bg-acc hover:bg-accH text-black text-sm font-semibold transition-colors bp">Fermer</button></div></div>');
+}
+/* Vérifie l'état réel du cloud (lecture forcée sur le serveur, pas le cache) et affiche un
+   rapport complet dans une modale — fonctionne sur mobile sans avoir besoin d'ouvrir la
+   console développeur. À lancer sur desktop ET mobile puis comparer les deux rapports. */
 function fbDiagCheck(){
-if(!fbIsReady()){alert('DIAGNOSTIC\n\nPas prêt : non connecté à Firebase sur cet appareil.');return;}
+if(!fbIsReady()){showDiagModal('Diagnostic cloud',['Pas prêt : non connecté à Firebase sur cet appareil.']);return;}
 var localTs=parseInt(localStorage.getItem('cdc_fb_ts')||'0');
 FB.db.collection('crm_data').doc(FB.uid).get({source:'server'}).then(function(snap){
-var lignes=['--- DIAGNOSTIC CLOUD ---',''];
+var lignes=[];
 lignes.push('UID : '+FB.uid);
 lignes.push('Email : '+(FB.userEmail||'—'));
 lignes.push('Document principal existe : '+(snap.exists?'OUI':'NON'));
@@ -811,7 +823,7 @@ lignes.push('--- STORAGE (photos notes de frais) ---');
 lignes.push('Bucket configuré : '+(FB.storageBucket||'—'));
 if(!FB.storage){
 lignes.push('FB.storage non initialisé — le module Storage n\'a pas pu démarrer (vérifie que le script firebase-storage-compat est bien chargé).');
-alert(lignes.join('\n'));
+showDiagModal('Diagnostic cloud',lignes);
 return;
 }
 /* Test d'écriture réel (pas juste "est-ce initialisé ?") : c'est la seule façon de
@@ -822,16 +834,16 @@ return testRef.putString('diagnostic').then(function(){
 return testRef.delete().catch(function(){});
 }).then(function(){
 lignes.push('Test d\'écriture Storage : OK — les photos peuvent être envoyées depuis cet appareil.');
-alert(lignes.join('\n'));
+showDiagModal('Diagnostic cloud',lignes);
 }).catch(function(e){
 lignes.push('Test d\'écriture Storage : ÉCHEC — '+(e.code||'')+' : '+(e.message||e));
 if(e.code==='storage/unauthorized')lignes.push('→ Les règles de sécurité Storage (Firebase Console → Storage → Rules) refusent l\'écriture. Elles doivent autoriser au moins request.auth != null.');
 else if(e.code==='storage/unknown'||e.code==='storage/bucket-not-found'||e.code==='storage/project-not-found')lignes.push('→ Le bucket "'+(FB.storageBucket||'?')+'" semble introuvable ou Storage n\'est pas activé sur ce projet Firebase (Firebase Console → Storage → Commencer).');
-alert(lignes.join('\n'));
+showDiagModal('Diagnostic cloud',lignes);
 });
 });
 }).catch(function(e){
-alert('ERREUR lors de la vérification cloud :\n\n'+(e.code||'')+'\n'+(e.message||e));
+showDiagModal('Diagnostic cloud — erreur',['ERREUR lors de la vérification cloud :','',(e.code||'')+' : '+(e.message||e)]);
 });
 }
 
