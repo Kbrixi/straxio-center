@@ -839,6 +839,7 @@ showDiagModal('Diagnostic cloud',lignes);
 lignes.push('Test d\'écriture Storage : ÉCHEC — '+(e.code||'')+' : '+(e.message||e));
 if(e.code==='storage/unauthorized')lignes.push('→ Les règles de sécurité Storage (Firebase Console → Storage → Rules) refusent l\'écriture. Elles doivent autoriser au moins request.auth != null.');
 else if(e.code==='storage/unknown'||e.code==='storage/bucket-not-found'||e.code==='storage/project-not-found')lignes.push('→ Le bucket "'+(FB.storageBucket||'?')+'" semble introuvable ou Storage n\'est pas activé sur ce projet Firebase (Firebase Console → Storage → Commencer).');
+else if(e.code==='storage/retry-limit-exceeded')lignes.push('→ La requête n\'aboutit jamais (délai dépassé après plusieurs tentatives). Causes les plus courantes, à tester dans cet ordre : 1) réseau instable/VPN — retente sur un autre réseau ; 2) bloqueur de pub/traqueurs (uBlock, Brave Shields...) qui bloque firebasestorage.googleapis.com — retente en navigation privée sans extensions ; 3) CORS non configuré sur le bucket pour ce domaine (fréquent avec un site statique type GitHub Pages) — nécessite une commande gsutil cors set côté Firebase/Google Cloud.');
 showDiagModal('Diagnostic cloud',lignes);
 });
 });
