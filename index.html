@@ -766,11 +766,10 @@ var lignes=[];
 lignes.push('UID : '+(FB.uid?FB.uid:'—'));
 lignes.push('Email : '+(FB.userEmail||'—'));
 lignes.push('Dernier horodatage connu sur cet appareil : '+(localTs?new Date(localTs).toLocaleString('fr-FR'):'aucun'));
-/* Diagnostic Storage (photos de notes de frais) : séparé de Firestore, échoue souvent
-   silencieusement (bucket non activé, règles de sécurité manquantes) sans qu'aucune erreur
-   ne remonte ailleurs dans l'app — d'où ce statut visible sans console, y compris sur mobile. */
-lignes.push('Storage (photos) : '+(FB.storage?'initialisé':'non initialisé — SDK Storage manquant ou bucket vide'));
-lignes.push('Bucket configuré : '+(FB.storageBucket||'—'));
+/* Diagnostic photos de notes de frais : stockées sur l'hébergement personnel de l'utilisateur
+   (pas Firebase Storage), échoue souvent silencieusement sans qu'aucune erreur ne remonte
+   ailleurs dans l'app — d'où ce statut visible sans console, y compris sur mobile. */
+lignes.push('Hébergement photos : '+(typeof photoStorageReady==='function'&&photoStorageReady()?'configuré':'non configuré (Paramètres → Photos notes de frais)'));
 if(typeof EXP!=='undefined'){
 var pendingPhotos=EXP.filter(function(x){return x.photoSyncStatus==='pending';});
 lignes.push('Photos de notes de frais en attente d\'envoi sur cet appareil : '+pendingPhotos.length);
@@ -819,29 +818,8 @@ lignes.push('Horodatage local connu : '+(localTs?new Date(localTs).toLocaleStrin
 lignes.push('');
 lignes.push(remote&&rts===localTs?'SYNCHRONISÉ avec le cloud':'DÉCALAGE : cet appareil n\'a pas la dernière version du cloud (ou inversement)');
 lignes.push('');
-lignes.push('--- STORAGE (photos notes de frais) ---');
-lignes.push('Bucket configuré : '+(FB.storageBucket||'—'));
-if(!FB.storage){
-lignes.push('FB.storage non initialisé — le module Storage n\'a pas pu démarrer (vérifie que le script firebase-storage-compat est bien chargé).');
+lignes.push('Les photos de notes de frais ne passent plus par Firebase Storage — utilise le bouton « Tester la connexion » de la section « Photos notes de frais » dans les Paramètres pour diagnostiquer leur envoi.');
 showDiagModal('Diagnostic cloud',lignes);
-return;
-}
-/* Test d'écriture réel (pas juste "est-ce initialisé ?") : c'est la seule façon de
-   distinguer un bucket mal configuré d'une règle de sécurité Storage qui bloque les
-   écritures — les deux donnent un FB.storage "initialisé" mais échouent différemment. */
-var testRef=FB.storage.ref().child('expenses/'+FB.uid+'/_diag_test.txt');
-return testRef.putString('diagnostic').then(function(){
-return testRef.delete().catch(function(){});
-}).then(function(){
-lignes.push('Test d\'écriture Storage : OK — les photos peuvent être envoyées depuis cet appareil.');
-showDiagModal('Diagnostic cloud',lignes);
-}).catch(function(e){
-lignes.push('Test d\'écriture Storage : ÉCHEC — '+(e.code||'')+' : '+(e.message||e));
-if(e.code==='storage/unauthorized')lignes.push('→ Les règles de sécurité Storage (Firebase Console → Storage → Rules) refusent l\'écriture. Elles doivent autoriser au moins request.auth != null.');
-else if(e.code==='storage/unknown'||e.code==='storage/bucket-not-found'||e.code==='storage/project-not-found')lignes.push('→ Le bucket "'+(FB.storageBucket||'?')+'" semble introuvable ou Storage n\'est pas activé sur ce projet Firebase (Firebase Console → Storage → Commencer).');
-else if(e.code==='storage/retry-limit-exceeded')lignes.push('→ La requête n\'aboutit jamais (délai dépassé après plusieurs tentatives). Causes les plus courantes, à tester dans cet ordre : 1) réseau instable/VPN — retente sur un autre réseau ; 2) bloqueur de pub/traqueurs (uBlock, Brave Shields...) qui bloque firebasestorage.googleapis.com — retente en navigation privée sans extensions ; 3) CORS non configuré sur le bucket pour ce domaine (fréquent avec un site statique type GitHub Pages) — nécessite une commande gsutil cors set côté Firebase/Google Cloud.');
-showDiagModal('Diagnostic cloud',lignes);
-});
 });
 }).catch(function(e){
 showDiagModal('Diagnostic cloud — erreur',['ERREUR lors de la vérification cloud :','',(e.code||'')+' : '+(e.message||e)]);
@@ -879,7 +857,7 @@ fbStartSync();
    d'un AUTRE appareil (window._onExpensesSynced) — jamais simplement en se reconnectant après
    un échec réseau initial sur l'appareil qui a pris la photo. */
 if(typeof window.retryPendingExpensePhotos==='function'){
-setTimeout(function(){if(typeof fbStorageReady==='function'&&fbStorageReady())window.retryPendingExpensePhotos(true);},2000);
+setTimeout(function(){if(typeof photoStorageReady==='function'&&photoStorageReady())window.retryPendingExpensePhotos(true);},2000);
 }
 if(wasExplicit){
 toast('Connecté en tant que '+FB.userEmail,'info');
@@ -4894,6 +4872,7 @@ ${SND[ev.key]?`<button onclick="removeSound('${ev.key}')" data-tip="Retirer" cla
 <p class="text-[.65rem] text-mut mt-2">Formats acceptés : MP3, WAV, OGG, M4A, AAC. Taille max ~350 Ko par son. Sans import, un bip synthétisé façon LCARS est utilisé.</p>
 </div>
 ${fbSettingsUI()}
+${lwsSettingsUI()}
 <div class="flex justify-end mt-6"><button onclick="clsM()" class="h-10 px-5 rounded-xl bg-sAlt border border-bdr text-sm font-medium hover:bg-sHov transition-colors bp">Fermer</button></div>
 </div>`);
 }
@@ -4910,9 +4889,9 @@ var html=`<div class="pt-4 border-t border-bdr mt-4">
 <input id="fbApiKey" class="fi text-xs mb-2" placeholder="AIzaSy..." value="${cfg?cfg.apiKey:''}">
 <label class="text-[.65rem] text-mut block mb-1">ID du projet (projectId)</label>
 <input id="fbProjectId" class="fi text-xs mb-2" placeholder="mon-crm-abc123" value="${cfg?cfg.projectId:''}">
-<label class="text-[.65rem] text-mut block mb-1">Bucket Storage (storageBucket) — pour les photos de notes de frais</label>
+<label class="text-[.65rem] text-mut block mb-1">Bucket Storage (storageBucket) — optionnel, non utilisé pour les photos de notes de frais</label>
 <input id="fbStorageBucket" class="fi text-xs" placeholder="mon-crm-abc123.firebasestorage.app" value="${cfg?(cfg.storageBucket||''):''}">
-<p class="text-[.6rem] text-mut mt-1">Laisse vide pour une valeur par défaut. Si l'envoi de photos échoue, active Cloud Storage dans la console Firebase (Storage → Get started) et colle ici le nom exact du bucket affiché.</p>
+<p class="text-[.6rem] text-mut mt-1">Les photos de notes de frais passent maintenant par ton propre hébergement (section « Photos notes de frais » ci-dessous), pas par Firebase Storage — ce champ ne sert plus qu'à un usage Firebase Storage avancé éventuel.</p>
 </div>
 <div class="flex flex-wrap gap-2">
 <button onclick="fbConnectFromSettings()" class="h-9 px-4 rounded-xl bg-inf hover:brightness-110 text-black text-xs font-disp font-bold uppercase tracking-wide transition-colors bp">Enregistrer</button>
@@ -4924,6 +4903,68 @@ ${isConnected?'<button onclick="fbDiagCheck()" class="h-9 px-4 rounded-xl bg-sAl
 </div>`;
 return html;
 }
+/* ===== Configuration du stockage photos sur hébergement personnel (LWS) =====
+   SET.lwsEndpoint / SET.lwsToken sont stockés dans les paramètres synchronisés (SET/cdc_settings)
+   comme le reste de la config CRM : les configurer une fois suffit, ça se propage aux autres
+   appareils via la synchro Firestore déjà en place — pas besoin de ressaisir sur chaque appareil. */
+function lwsSettingsUI(){
+var ready=photoStorageReady();
+return `<div class="pt-4 border-t border-bdr mt-4">
+<label class="text-xs font-disp uppercase tracking-wide text-mut mb-3 flex items-center gap-2 block"><i class="fa-solid fa-server text-inf"></i>Photos notes de frais (hébergement personnel)</label>
+<div class="mb-3 ${ready?'text-ok':'text-mut'} text-[.65rem]">${ready?'<i class="fa-solid fa-circle-check mr-1"></i>Configuré':'<i class="fa-solid fa-circle-xmark mr-1"></i>Non configuré — les photos resteront en attente sur chaque appareil'}</div>
+<div class="bg-sAlt border border-bdr rounded-xl p-3 mb-3">
+<label class="text-[.65rem] text-mut block mb-1">URL de l'endpoint (upload.php déposé sur ton hébergement)</label>
+<input id="lwsEndpoint" class="fi text-xs mb-2" placeholder="https://straxio.fr/cdc-photos/upload.php" value="${SET.lwsEndpoint||''}">
+<label class="text-[.65rem] text-mut block mb-1">Clé secrète (doit être identique à SECRET_TOKEN dans le script PHP)</label>
+<input id="lwsToken" class="fi text-xs" placeholder="chaîne longue et aléatoire" value="${SET.lwsToken||''}">
+<p class="text-[.6rem] text-mut mt-1">Dépose le script upload.php fourni sur ton hébergement LWS (straxio.fr), génère une clé secrète longue et aléatoire, colle-la ici ET dans le script (SECRET_TOKEN), puis Enregistrer.</p>
+</div>
+<div class="flex flex-wrap gap-2">
+<button onclick="saveLwsSettings()" class="h-9 px-4 rounded-xl bg-inf hover:brightness-110 text-black text-xs font-disp font-bold uppercase tracking-wide transition-colors bp">Enregistrer</button>
+<button onclick="lwsDiagCheck()" class="h-9 px-4 rounded-xl bg-sAlt border border-bdr text-xs font-medium hover:bg-sHov transition-colors bp"><i class="fa-solid fa-stethoscope mr-1"></i>Tester la connexion</button>
+${(EXP.filter(x=>x.photoSyncStatus==='pending').length)?'<button onclick="retryPendingExpensePhotos()" class="h-9 px-4 rounded-xl bg-warn hover:brightness-110 text-black text-xs font-disp font-bold uppercase tracking-wide transition-colors bp"><i class="fa-solid fa-cloud-arrow-up mr-1"></i>Envoyer les photos en attente</button>':''}
+</div>
+</div>`;
+}
+window.saveLwsSettings=function(){
+var endpointEl=document.getElementById('lwsEndpoint'),tokenEl=document.getElementById('lwsToken');
+SET.lwsEndpoint=endpointEl?endpointEl.value.trim():'';
+SET.lwsToken=tokenEl?tokenEl.value.trim():'';
+svSettings();
+toast('Configuration photos enregistrée');
+setTimeout(function(){openSettingsM();},500);
+};
+/* Test de connexion à l'endpoint LWS : envoie une petite image test, vérifie qu'elle est bien
+   accessible en HTTPS à l'URL retournée, puis la supprime. Rapport dans une modale (jamais
+   alert(), pour la même raison que le diagnostic Firebase : peu fiable sur mobile). */
+window.lwsDiagCheck=async function(){
+if(!photoStorageReady()){showDiagModal('Diagnostic photos (hébergement)',['URL et/ou clé secrète manquantes — remplis les deux champs et Enregistre d\'abord.']);return;}
+var lignes=['URL testée : '+SET.lwsEndpoint,''];
+var testId='_diag_'+Date.now();
+try{
+var tinyJpegDataUrl='data:image/jpeg;base64,/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k=';
+var up=await uploadExpensePhoto(testId,tinyJpegDataUrl);
+lignes.push('Envoi test : OK');
+lignes.push('URL renvoyée : '+(up?up.url:'—'));
+if(up&&up.url){
+try{
+var check=await fetch(up.url,{cache:'no-store'});
+lignes.push('Photo accessible en HTTPS : '+(check.ok?'OUI (HTTP '+check.status+')':'NON (HTTP '+check.status+') — vérifie PUBLIC_BASE_URL dans le script PHP'));
+}catch(fetchErr){lignes.push('Photo accessible en HTTPS : impossible à vérifier ('+fetchErr.message+') — CORS ou URL incorrecte dans PUBLIC_BASE_URL ?');}
+}
+await deleteExpensePhoto(up?up.path:testId);
+lignes.push('Suppression test : effectuée');
+lignes.push('');
+lignes.push('CONNEXION OK — les photos peuvent être envoyées vers cet hébergement.');
+}catch(e){
+lignes.push('ÉCHEC : '+(e.code||'')+' '+(e.message||e));
+lignes.push('');
+if(String(e.message||'').indexOf('403')!==-1||String(e.code||'').indexOf('403')!==-1)lignes.push('→ Jeton secret refusé (HTTP 403) : vérifie que la clé collée ici est EXACTEMENT identique à SECRET_TOKEN dans le script PHP.');
+else if(String(e.message||'').toLowerCase().indexOf('failed to fetch')!==-1||String(e.message||'').toLowerCase().indexOf('networkerror')!==-1)lignes.push('→ Requête bloquée avant même d\'atteindre le script : vérifie l\'URL, que le fichier upload.php est bien déposé à cet emplacement, et l\'en-tête Access-Control-Allow-Origin (ALLOWED_ORIGIN) dans le script — il doit correspondre exactement à l\'adresse où le CRM est hébergé.');
+else lignes.push('→ Vérifie que le script upload.php est bien déposé à cette URL et que le dossier de stockage (STORAGE_DIR) est accessible en écriture par PHP sur ton hébergement.');
+}
+showDiagModal('Diagnostic photos (hébergement)',lignes);
+};
 function fbConnectFromSettings(){
 var apiKey=document.getElementById('fbApiKey').value.trim();
 var projectId=document.getElementById('fbProjectId').value.trim();
@@ -9993,23 +10034,43 @@ reader.readAsDataURL(file);
 });
 }
 
-/* ===== FIREBASE STORAGE (photos uniquement, jamais dans Firestore) ===== */
-function fbStorageReady(){return!!(FB.app&&FB.storage&&FB.uid);}
-async function uploadExpensePhoto(expenseId,dataUrl){
-if(!fbStorageReady())return null;
+/* ===== STOCKAGE PHOTOS (hébergement LWS de l'utilisateur, jamais dans Firestore) =====
+   Choisi à la place de Firebase Storage : Firebase Storage exige depuis fin 2024 le plan payant
+   Blaze pour provisionner un nouveau bucket, alors que l'utilisateur dispose déjà d'un
+   hébergement web (straxio.fr chez LWS) qu'il paye. Un petit script PHP (upload.php, à déposer
+   sur cet hébergement — voir le commentaire au-dessus de sa définition plus bas dans ce fichier
+   pour le code complet à copier) reçoit les photos et les sert en HTTPS. Ce module envoie les
+   requêtes à cet endpoint plutôt qu'à Firebase Storage — le reste du flux (retry, statut
+   pending/synced, diagnostic) est inchangé, seule cette implémentation change. */
+/* Exposées sur window : ce module tourne dans une IIFE, mais photoStorageReady/uploadExpensePhoto/
+   deleteExpensePhoto sont aussi appelées depuis la section Paramètres (lwsSettingsUI/lwsDiagCheck),
+   définie dans le script principal en dehors de cette IIFE — sans window., ces appels lèveraient
+   une ReferenceError "is not defined" (même piège que window.setExf découvert précédemment). */
+window.photoStorageReady=function(){return!!(SET.lwsEndpoint&&SET.lwsToken);};
+window.uploadExpensePhoto=async function(expenseId,dataUrl){
+if(!photoStorageReady())return null;
 const blob=dataUrlToBlob(dataUrl);
-const path='expenses/'+FB.uid+'/'+expenseId+'.jpg';
-const ref=FB.storage.ref().child(path);
-await ref.put(blob,{contentType:'image/jpeg'});
-const url=await ref.getDownloadURL();
-return{path,url};
+const url=SET.lwsEndpoint.replace(/\/+$/,'')+'?id='+encodeURIComponent(expenseId);
+const res=await fetch(url,{method:'POST',headers:{'X-Auth-Token':SET.lwsToken,'Content-Type':'image/jpeg'},body:blob});
+if(!res.ok){
+let detail='';try{const j=await res.json();detail=j.error||'';}catch(e){}
+const err=new Error('Envoi photo LWS échoué (HTTP '+res.status+')'+(detail?' : '+detail:''));
+err.code='lws/http-'+res.status;
+throw err;
 }
-async function deleteExpensePhoto(path){
-if(!fbStorageReady()||!path)return;
-try{await FB.storage.ref().child(path).delete();}catch(e){/* ignore */}
+const data=await res.json();
+if(!data||!data.url)throw new Error('Réponse LWS invalide (pas d\'URL retournée)');
+return{path:data.path||String(expenseId),url:data.url};
+};
+window.deleteExpensePhoto=async function(path){
+if(!photoStorageReady()||!path)return;
+try{
+const url=SET.lwsEndpoint.replace(/\/+$/,'')+'?id='+encodeURIComponent(path);
+await fetch(url,{method:'DELETE',headers:{'X-Auth-Token':SET.lwsToken}});
+}catch(e){/* ignore */}
 }
 window.retryPendingExpensePhotos=async function(silent){
-if(!fbStorageReady()){if(!silent)toast('Connecte le cloud (Google) pour envoyer les photos en attente','err');return;}
+if(!photoStorageReady()){if(!silent)toast('Configure l\'hébergement des photos dans Paramètres pour les envoyer','err');return;}
 const pending=EXP.filter(x=>x.photoSyncStatus==='pending');
 if(!pending.length){if(!silent)toast('Aucune photo en attente','info');return;}
 if(!silent)toast('Envoi de '+pending.length+' photo(s) en cours...','info');
@@ -10031,7 +10092,7 @@ if(ok===pending.length){toast(ok+' photo(s) synchronisée(s)','ok');}
 else{toast(ok+' photo(s) synchronisée(s) · '+(pending.length-ok)+' échec(s) : '+(lastErr?(lastErr.code||lastErr.message||lastErr):'raison inconnue'),'err');}
 };
 /* Relance automatique quand une sync cloud arrive (connexion, reconnexion...) */
-window._onExpensesSynced=function(){if(fbStorageReady())retryPendingExpensePhotos(true);if(S.v==='expenses')rExpenses();};
+window._onExpensesSynced=function(){if(photoStorageReady())retryPendingExpensePhotos(true);if(S.v==='expenses')rExpenses();};
 
 /* ===== MODAL CAPTURE / ÉDITION ===== */
 let _pendingExpensePhoto=null;
@@ -10283,13 +10344,13 @@ svExpenses();
 try{clsM();ren();}catch(renderErr){console.error('[Expenses] Erreur de rendu après sauvegarde (les données sont bien enregistrées) :',renderErr);}
 toast(isNew?'Note de frais ajoutée':'Note de frais modifiée');
 if(hasPendingPhoto){
-if(fbStorageReady()){
+if(photoStorageReady()){
 try{
 const up=await uploadExpensePhoto(exp.id,pending.dataUrl);
-if(up){exp.photoPath=up.path;exp.photoUrl=up.url;exp.photoSyncStatus='synced';expClearPendingPhoto(exp.id);svExpenses();if(S.v==='expenses')rExpenses();toast('Photo synchronisée sur le cloud','ok');}
-}catch(err){console.error('[Expenses] upload erreur',err);toast('Photo gardée sur cet appareil — l\'envoi cloud a échoué ('+(err.code||err.message||err)+'), nouvelle tentative plus tard','err');}
+if(up){exp.photoPath=up.path;exp.photoUrl=up.url;exp.photoSyncStatus='synced';expClearPendingPhoto(exp.id);svExpenses();if(S.v==='expenses')rExpenses();toast('Photo envoyée sur ton hébergement','ok');}
+}catch(err){console.error('[Expenses] upload erreur',err);toast('Photo gardée sur cet appareil — l\'envoi a échoué ('+(err.code||err.message||err)+'), nouvelle tentative plus tard','err');}
 }else{
-toast('Cloud non connecté : la photo reste sur cet appareil pour l\'instant','info');
+toast('Hébergement photos non configuré (Paramètres) : la photo reste sur cet appareil pour l\'instant','info');
 }
 }
 };
