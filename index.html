@@ -10107,8 +10107,18 @@ const up=await uploadExpensePhoto(exp.id,dataUrl);
 if(up){exp.photoPath=up.path;exp.photoUrl=up.url;exp.photoSyncStatus='synced';expClearPendingPhoto(exp.id);ok++;}
 }catch(err){console.error('[Expenses] retry upload erreur',err);lastErr=err;}
 }
-svExpenses();
-if(S.v==='expenses')rExpenses();
+/* IMPORTANT : ne persister/pousser vers le cloud QUE si quelque chose a réellement changé (ok>0).
+   Cette fonction est appelée automatiquement à CHAQUE synchronisation reçue d'un autre appareil
+   (via _onExpensesSynced), pour n'importe quelle donnée du CRM — pas seulement les notes de frais.
+   Avant ce correctif, svExpenses() était appelée ici sans condition, y compris quand ok===0 (aucun
+   envoi réussi, ou aucune photo à réessayer trouvée localement). Résultat : sur un appareil ayant
+   des photos bloquées en attente (ex. anciennes tentatives Firebase Storage/LWS échouées), chaque
+   synchronisation reçue déclenchait un re-push de l'intégralité des données de cet appareil — even
+   quand rien n'avait changé. Si une édition/suppression était faite sur un AUTRE appareil pendant
+   ce court laps de temps (le temps d'essayer d'envoyer plusieurs photos), ce re-push écrasait la
+   modification plus récente avec une copie locale plus ancienne : symptôme observé par l'utilisateur
+   ("les notes de frais modifiées/supprimées sur desktop reviennent, renvoyées par le mobile"). */
+if(ok>0){svExpenses();if(S.v==='expenses')rExpenses();}
 /* L'erreur exacte (code Firebase Storage) est affichée plutôt que juste "échec" — sans ça,
    impossible de diagnostiquer depuis un mobile sans console développeur (bucket non activé,
    règles de sécurité Storage manquantes, etc. donnent des codes différents et distinctifs). */
