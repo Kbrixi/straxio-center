@@ -1725,10 +1725,19 @@ const sn=document.getElementById('sNC');if(sn)sn.textContent=ND.notes.filter(n=>
 let chartInstances={};
 function destroyCharts(){Object.values(chartInstances).forEach(c=>{try{c.destroy();}catch(e){}});chartInstances={};}
 
+/* Clé composite identifiant la "destination" affichée (pas juste S.v : changer de dossier, de
+   projet, de note ouverte ou d'onglet marketing est aussi une navigation vers autre chose). Sert
+   à ne remettre le scroll en haut QUE quand la destination change réellement (voir plus bas). */
+let _lastRenderKey=null;
 function ren(){
 destroyCharts();
 renderFolderNav();
 updateNavActive();
+var renderKey=S.v+'|'+(S.folder||'')+'|'+(S.project||'')
++'|'+(S.v==='notes'?(NS.isEditorOpen?('edit:'+NS.selectedNoteId):'list'):'')
++'|'+(S.v==='marketing'?(S.mkv||''):'');
+var destinationChanged=renderKey!==_lastRenderKey;
+_lastRenderKey=renderKey;
 if(S.v==='dash')rDash();
 else if(S.v==='folder')rFolder();
 else if(S.v==='project')rProject();
@@ -1741,6 +1750,16 @@ else if(S.v==='meetings')rMeetings();
 else if(S.v==='notes'){if(NS.isEditorOpen&&NS.selectedNoteId)rNoteEditor();else rNotes();}
 else if(S.v==='expenses')rExpenses();
 else{S.v='dash';rDash();}
+/* Sur mobile surtout : cliquer sur un lien de navigation (sidebar, ouvrir un dossier/projet/note...)
+   laissait le scroll là où il était sur la page précédente, donnant l'impression d'atterrir "en
+   plein milieu" de la nouvelle page. On ne force le retour en haut que lorsque la destination a
+   réellement changé — jamais sur un simple re-rendu en place (ex. cocher une tâche dans une longue
+   liste, changer un filtre) — pour ne pas faire sauter le scroll pendant une action sur place. */
+if(destinationChanged){
+var main=document.querySelector('main.overflow-y-auto');
+if(main)main.scrollTop=0;
+window.scrollTo(0,0);
+}
 }
 
 /* ===== HELPERS PROJETS ===== */
@@ -9746,6 +9765,7 @@ let h=`<div class="max-w-6xl mx-auto">
 <div class="flex flex-wrap gap-2">
 ${pendingPhotos?`<button onclick="retryPendingExpensePhotos()" class="h-9 px-3 rounded-xl bg-warnS text-warn text-xs font-medium hover:brightness-110 bp"><i class="fa-solid fa-cloud-arrow-up mr-1"></i>${pendingPhotos} photo${pendingPhotos>1?'s':''} en attente</button>`:''}
 <button onclick="expExportCsv()" class="h-9 px-4 rounded-xl bg-sAlt border border-bdr text-xs font-medium hover:bg-sHov transition-colors bp"><i class="fa-solid fa-file-csv mr-1"></i>Exporter CSV</button>
+<button onclick="expExportPdf()" class="h-9 px-4 rounded-xl bg-sAlt border border-bdr text-xs font-medium hover:bg-sHov transition-colors bp"><i class="fa-solid fa-file-pdf mr-1"></i>Exporter PDF <span class="text-mut text-[.6rem]">(selon filtres)</span></button>
 <button onclick="openExpenseCaptureM()" class="h-9 px-4 rounded-xl bg-acc hover:bg-accH text-black text-xs font-semibold transition-colors bp"><i class="fa-solid fa-camera mr-1"></i>Nouvelle note de frais</button>
 </div>
 </div>
@@ -10431,7 +10451,10 @@ ${EXP_STATUSES.map(s=>`<button onclick="expSetStatus(${x.id},'${s.key}')" class=
 </div>
 <div class="flex justify-between gap-3 mt-4">
 <button onclick="delExpense(${x.id})" class="h-10 px-4 rounded-xl bg-accS text-acc text-sm font-medium hover:bg-accS/70 transition-colors bp"><i class="fa-solid fa-trash mr-1"></i>Supprimer</button>
+<div class="flex gap-2">
+<button onclick="expPrintPdf(${x.id})" class="h-10 px-4 rounded-xl bg-sAlt border border-bdr text-sm font-medium hover:bg-sHov transition-colors bp"><i class="fa-solid fa-file-pdf mr-1"></i>Exporter PDF</button>
 <button onclick="clsM();openExpenseCaptureM(${x.id})" class="h-10 px-4 rounded-xl bg-sAlt border border-bdr text-sm font-medium hover:bg-sHov transition-colors bp"><i class="fa-solid fa-pen mr-1"></i>Modifier</button>
+</div>
 </div>
 </div>`);
 if(photoPendingRemote){
@@ -10452,6 +10475,105 @@ if(x)expClearPendingPhoto(x.id);
 EXP=EXP.filter(e=>e.id!==id);
 svExpenses();clsM();if(S.v==='expenses')rExpenses();
 toast('Note de frais supprimée','info');
+};
+
+/* ===== EXPORT PDF (fiche par note, ou export groupé selon les filtres actifs) =====
+   Même principe que nPrintNote() ailleurs dans l'app : pas de librairie PDF externe — on ouvre une
+   fenêtre avec un document HTML autonome (feuille de style print-friendly, claire, imprimable) et
+   on déclenche window.print(), qui laisse le navigateur (ou l'utilisateur, via "Enregistrer en
+   PDF") produire le fichier. La fenêtre est ouverte AVANT tout await (photo à récupérer depuis
+   Firestore si besoin) pour rester dans le geste utilisateur d'origine — sinon certains navigateurs
+   mobiles bloquent l'ouverture comme un pop-up indésirable — puis son contenu est remplacé une fois
+   les données prêtes. */
+function expPrintStyles(){
+return`body{font-family:'Segoe UI',Arial,sans-serif;color:#222;line-height:1.5;margin:0;padding:0;background:#fff}
+.fiche{padding:32px 36px;page-break-after:always}
+.fiche:last-child{page-break-after:auto}
+.fiche-hdr{display:flex;justify-content:space-between;align-items:baseline;gap:12px;border-bottom:2px solid #ff9c00;padding-bottom:10px;margin-bottom:6px}
+.fiche-hdr h1{font-size:1.3rem;margin:0}
+.fiche-amount{font-size:1.2rem;font-weight:700;white-space:nowrap}
+.fiche-meta{color:#777;font-size:.8rem;margin-bottom:14px}
+.badge-ok{display:inline-block;background:#e6f7ec;color:#1a7a3d;padding:6px 10px;border-radius:6px;font-size:.75rem;margin-bottom:14px}
+.badge-warn{display:inline-block;background:#fff2e0;color:#a35b00;padding:6px 10px;border-radius:6px;font-size:.75rem;margin-bottom:14px}
+.fiche-photo{max-width:100%;max-height:280px;object-fit:contain;display:block;margin:0 auto 16px;border:1px solid #ddd;border-radius:6px}
+table.fiche-table{width:100%;border-collapse:collapse;font-size:.85rem;margin-bottom:6px}
+table.fiche-table td{padding:6px 8px;border-bottom:1px solid #eee;vertical-align:top}
+table.fiche-table td:first-child{color:#777;width:38%}
+.fiche-ocr{font-size:.7rem;color:#888;background:#f7f7f7;padding:10px;border-radius:6px;margin-top:14px;white-space:pre-wrap;word-break:break-word}
+.summary{padding:32px 36px 14px}
+.summary h1{font-size:1.25rem;margin:0 0 4px}
+.summary .gen{color:#999;font-size:.75rem;margin-bottom:16px}
+.summary table{width:100%;border-collapse:collapse;font-size:.85rem}
+.summary td{padding:5px 8px;border-bottom:1px solid #eee}
+@media print{.fiche{padding:20px}.summary{padding:20px 20px 10px}}`;
+}
+function expFicheHtml(x,photoSrc){
+const jur=expJur(x.jurisdiction||'CH');
+const c=expCat(x.category);
+const isKm=x.expenseType==='km';
+const issues=expComplianceIssues(x);
+return`<div class="fiche">
+<div class="fiche-hdr"><h1>${escHtml(x.vendor)||'Note de frais'}</h1><div class="fiche-amount">${expFmtAmount(x.amount,x.currency)}</div></div>
+<div class="fiche-meta">${fmtFr(x.date)} · ${c.label} · ${expStatus(x.status).label} · ${jur.label}</div>
+${issues.length?`<div class="badge-warn">À corriger avant contrôle fiscal (${jur.authority}) : ${issues.map(function(i){return escHtml(i);}).join(' · ')}</div>`:`<div class="badge-ok">Conforme aux exigences ${jur.authority}</div>`}
+${(!isKm&&photoSrc)?`<img class="fiche-photo" src="${photoSrc}" alt="Facture">`:''}
+<table class="fiche-table">
+<tr><td>${isKm?'Trajet':'Fournisseur'}</td><td>${escHtml(x.vendor)||'—'}</td></tr>
+<tr><td>Montant</td><td>${expFmtAmount(x.amount,x.currency)}</td></tr>
+<tr><td>Date</td><td>${fmtFr(x.date)}</td></tr>
+<tr><td>Catégorie</td><td>${c.label}</td></tr>
+<tr><td>Dossier</td><td>${x.folder&&fldr(x.folder)?escHtml(fldr(x.folder).name):'—'}</td></tr>
+<tr><td>Juridiction</td><td>${jur.label}</td></tr>
+<tr><td>Référence facture</td><td>${x.refNumber?escHtml(x.refNumber):'—'}</td></tr>
+${isKm?`<tr><td>Distance</td><td>${x.km||0} km × ${x.kmRate||0} ${x.currency}/km</td></tr>`:`
+<tr><td>TVA</td><td>${x.vatRate&&x.vatRate!=='na'?expVat(x.jurisdiction||'CH',x.vatRate).label+' — '+expFmtAmount(x.vatAmount,x.currency):(x.vatRate==='na'?'Non mentionnée':'—')}</td></tr>
+<tr><td>Montant HT</td><td>${expFmtAmount((x.amount||0)-(x.vatAmount||0),x.currency)}</td></tr>
+<tr><td>Facture complète</td><td>${x.fullInvoice?'Oui':'Non'}</td></tr>`}
+<tr><td>Personnes présentes</td><td>${x.attendees?escHtml(x.attendees):'—'}</td></tr>
+<tr><td>Motif professionnel</td><td>${x.note?escHtml(x.note):'—'}</td></tr>
+<tr><td>Statut</td><td>${expStatus(x.status).label}</td></tr>
+</table>
+${x.ocrText?`<div class="fiche-ocr"><b>Texte OCR brut (vérification) :</b><br>${escHtml(x.ocrText)}</div>`:''}
+</div>`;
+}
+/* Récupère une source d'image imprimable pour x : cache local si présent, sinon va la chercher sur
+   Firestore si elle y est synchronisée (cas d'une note créée sur un autre appareil). */
+async function expResolvePhotoForPrint(x){
+if(x.expenseType==='km')return'';
+let s=expPhotoSrcSync(x);
+if(!s&&x.photoSyncStatus==='synced')s=await fetchExpensePhotoUrl(x.id)||'';
+return s;
+}
+window.expPrintPdf=async function(id){
+const x=EXP.find(e=>e.id===id);if(!x)return;
+const w=window.open('','_blank','width=800,height=900');
+if(!w){toast('La fenêtre d\'impression a été bloquée par le navigateur (vérifie les pop-ups)','err');return;}
+w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Chargement…</title></head><body style="font-family:sans-serif;padding:40px;color:#888">Préparation du PDF…</body></html>');
+w.document.close();
+const photoSrc=await expResolvePhotoForPrint(x);
+const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escHtml(x.vendor)||'Note de frais'}</title><style>${expPrintStyles()}</style></head><body>${expFicheHtml(x,photoSrc)}</body></html>`;
+w.document.open();w.document.write(html);w.document.close();
+setTimeout(function(){try{w.focus();w.print();}catch(e){}},150);
+};
+window.expExportPdf=async function(){
+const list=filteredExpenses();
+if(!list.length){toast('Rien à exporter avec ce filtre','info');return;}
+const w=window.open('','_blank','width=800,height=900');
+if(!w){toast('La fenêtre d\'impression a été bloquée par le navigateur (vérifie les pop-ups)','err');return;}
+w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Chargement…</title></head><body style="font-family:sans-serif;padding:40px;color:#888">Préparation du PDF ('+list.length+' note(s))…</body></html>');
+w.document.close();
+const photos=await Promise.all(list.map(expResolvePhotoForPrint));
+const totalsByCur={};
+list.forEach(function(x){totalsByCur[x.currency]=(totalsByCur[x.currency]||0)+(x.amount||0);});
+const dates=list.map(function(x){return x.date;}).filter(Boolean).sort();
+const period=dates.length?(fmtFr(dates[0])+' – '+fmtFr(dates[dates.length-1])):'—';
+const summaryHtml=`<div class="summary"><h1>Notes de frais — export groupé</h1><div class="gen">${list.length} note(s) · Période : ${period} · Généré le ${new Date().toLocaleString('fr-FR')}</div>
+<table>${Object.keys(totalsByCur).map(function(cur){return'<tr><td>Total '+cur+'</td><td>'+expFmtAmount(totalsByCur[cur],cur)+'</td></tr>';}).join('')}</table>
+</div>`;
+const fichesHtml=list.map(function(x,i){return expFicheHtml(x,photos[i]);}).join('');
+const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Notes de frais</title><style>${expPrintStyles()}</style></head><body>${summaryHtml}${fichesHtml}</body></html>`;
+w.document.open();w.document.write(html);w.document.close();
+setTimeout(function(){try{w.focus();w.print();}catch(e){}},200);
 };
 
 /* ===== EXPORT CSV (pour comptabilité / remboursement) ===== */
