@@ -10407,6 +10407,19 @@ exp.photoSyncStatus='pending';
 svExpenses();
 try{clsM();ren();}catch(renderErr){console.error('[Expenses] Erreur de rendu après sauvegarde (les données sont bien enregistrées) :',renderErr);}
 toast(isNew?'Note de frais ajoutée':'Note de frais modifiée');
+/* BUG CORRIGÉ (sync mobile→desktop, PWA iOS écran d'accueil) : svExpenses() ci-dessus déclenche
+   un push cloud différé de 1.5s (fbQueuePush), avec un rattrapage normalement assuré par
+   pagehide/visibilitychange si l'onglet se ferme avant l'échéance. Mais une PWA ajoutée à l'écran
+   d'accueil sur iOS tourne dans un process WKWebView standalone qu'iOS peut suspendre/tuer dès la
+   mise en arrière-plan, sans garantie que pagehide/visibilitychange aient le temps de se déclencher
+   ET de terminer l'écriture Firestore — contrairement à un onglet Safari classique. Pour la capture
+   de note de frais (le cas d'usage mobile le plus fréquent : photo → enregistrer → quitter aussitôt),
+   on annule donc le push différé et on en déclenche un immédiatement, en l'attendant ici pour
+   maximiser les chances que l'écriture démarre avant que l'app ne soit mise en arrière-plan/tuée. */
+if(typeof fbIsReady==='function'&&fbIsReady()){
+if(typeof fbCancelQueuedPush==='function')fbCancelQueuedPush();
+if(typeof fbPush==='function'){try{await fbPush(true);}catch(e){}}
+}
 if(hasPendingPhoto){
 if(photoStorageReady()){
 try{
